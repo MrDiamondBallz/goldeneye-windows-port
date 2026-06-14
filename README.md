@@ -1,8 +1,8 @@
 # GoldenEye / N64 Native Port Research
 
-Experimental native-port research for running N64 games as real host executables, starting with **GoldenEye 007 (USA)**.
+Research repo for turning legally supplied N64 inputs into native host executables, starting with **GoldenEye 007 (USA)**.
 
-This is **not** an emulator frontend and it does **not** distribute game files. The current track is a ROM/decompilation-assisted static-recompilation pipeline: user-owned N64 inputs → N64Recomp-generated C/C++ → a native runtime harness → eventually a proper desktop port.
+This is **not** an emulator frontend, and the repo does **not** ship game files. The current path is straightforward: user-owned N64 inputs, N64Recomp-generated C/C++, a native runtime harness, and eventually a proper desktop port.
 
 ## Status
 
@@ -26,9 +26,7 @@ The game does **not** boot yet. The next milestone is to turn the debug `pause_s
 
 ## Legal boundary
 
-This repository is code and documentation only.
-
-It must not contain:
+This repository is code and documentation only. Do not commit:
 
 - commercial ROMs, ISOs, XEX files, or other copyrighted game binaries;
 - extracted commercial assets, textures, audio, saves, or proprietary SDK material;
