@@ -29,6 +29,10 @@ constexpr LocalSectionInfo kSections[] = {
     {0x00C00000u, 0x80020D90u, 0x0003C550u, 22},
 };
 
+constexpr uint32_t kCdataRomStart = 0x00021990u;
+constexpr uint32_t kInflateRomEnd = 0x00034B30u;
+constexpr uint32_t kCsegmentRamStart = 0x80020D90u;
+
 constexpr std::size_t kNumSections = 29;
 
 std::vector<int32_t> g_section_address_storage;
@@ -40,17 +44,21 @@ bool entrypoint_dispatch_enabled() {
     return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
 }
 
-int64_t runtime_offset_for_vaddr(uint32_t vaddr) {
+uint64_t runtime_offset_for_vaddr(uint32_t vaddr) {
     if (vaddr >= 0x80000000u && vaddr < 0x80800000u) {
-        return static_cast<int64_t>(vaddr - 0x80000000u);
+        return static_cast<uint64_t>(vaddr - 0x80000000u);
     }
     if (vaddr >= 0xA0000000u && vaddr < 0xA0800000u) {
-        return static_cast<int64_t>(vaddr - 0xA0000000u);
+        return static_cast<uint64_t>(vaddr - 0xA0000000u);
     }
     if (vaddr >= 0x70000000u && vaddr < 0x80000000u) {
-        return static_cast<int64_t>(vaddr) - static_cast<int64_t>(0x80000000u);
+        // N64Recomp's generated MEM_* macros subtract 0xFFFFFFFF80000000 from
+        // uint64_t gpr values. For positive low addresses this wraps into the
+        // 0xF0000000..0xFFFFFFFF host-offset range, so the host address space is
+        // reserved sparsely and low sections are mirrored there.
+        return static_cast<uint64_t>(static_cast<uint32_t>(vaddr - 0x80000000u));
     }
-    return std::numeric_limits<int64_t>::min();
+    return std::numeric_limits<uint64_t>::max();
 }
 
 bool load_rom_file(const char* rom_path) {
@@ -118,15 +126,12 @@ bool goldeneye_runtime_translate(uint8_t* rdram, uint32_t vaddr, std::size_t siz
         return false;
     }
 
-    const int64_t offset = runtime_offset_for_vaddr(vaddr);
-    if (offset == std::numeric_limits<int64_t>::min()) {
+    const uint64_t offset = runtime_offset_for_vaddr(vaddr);
+    if (offset == std::numeric_limits<uint64_t>::max()) {
         return false;
     }
 
-    const int64_t signed_size = static_cast<int64_t>(size);
-    const int64_t min_offset = -static_cast<int64_t>(kGoldenEyeLowMirrorBytes);
-    const int64_t max_offset = static_cast<int64_t>(kGoldenEyeRdramSize);
-    if (offset < min_offset || signed_size < 0 || offset + signed_size > max_offset) {
+    if (size > kGoldenEyeHostAddressSpaceBytes || offset > kGoldenEyeHostAddressSpaceBytes - size) {
         return false;
     }
 
@@ -183,6 +188,8 @@ bool goldeneye_has_function_metadata(uint32_t vram) {
     switch (vram) {
         case 0x80000400u: // recomp_entrypoint
         case 0x80000450u: // boot replacement seam
+        case 0x70000510u: // init
+        case 0x7020141Cu: // decompress_entry
         case 0x700004BCu: // get_csegmentSegmentStart
         case 0x7F06C46Cu: // return_null
             return true;
@@ -197,6 +204,10 @@ recomp_func_t* goldeneye_lookup_function(uint32_t vram) {
             return entrypoint_dispatch_enabled() ? recomp_entrypoint : nullptr;
         case 0x80000450u:
             return boot;
+        case 0x70000510u:
+            return init;
+        case 0x7020141Cu:
+            return decompress_entry;
         case 0x700004BCu:
             return get_csegmentSegmentStart;
         case 0x7F06C46Cu:
@@ -255,15 +266,32 @@ bool goldeneye_runtime_init(uint8_t* rdram, std::size_t rdram_size, const char* 
         out_state->sections.push_back(std::move(load));
     }
 
+    // The original boot flow expects the compressed cdata payload to be present
+    // at _csegmentSegmentStart before init() copies it down to the inflate work
+    // buffer. The ELF section metadata points section 22 at ROM 0x00C00000,
+    // which is exactly EOF for the local 12 MiB ROM image, so seed the known USA
+    // compressed range directly from the ROM bytes instead of treating that ELF
+    // section as a file-backed ROM range.
+    const std::size_t cdata_size = static_cast<std::size_t>(kInflateRomEnd - kCdataRomStart);
+    if (goldeneye_runtime_copy_rom_to_vaddr(rdram, kCdataRomStart, kCsegmentRamStart, cdata_size)) {
+        out_state->preloaded_cdata_bytes = cdata_size;
+    } else {
+        std::fprintf(stderr, "warning: failed to preload compressed cdata block rom=0x%08X ram=0x%08X size=0x%zX\n",
+            kCdataRomStart,
+            kCsegmentRamStart,
+            cdata_size);
+    }
+
     return true;
 }
 
 void goldeneye_runtime_print_state(const GoldenEyeRuntimeState& state) {
-    std::printf("sections: copied=%zu skipped=%zu copied_bytes=%zu low_mapped=%zu\n",
+    std::printf("sections: copied=%zu skipped=%zu copied_bytes=%zu low_mapped=%zu cdata_preloaded=%zu\n",
         state.copied_sections,
         state.skipped_sections,
         state.copied_bytes,
-        state.mapped_low_sections);
+        state.mapped_low_sections,
+        state.preloaded_cdata_bytes);
 
     for (const GoldenEyeSectionLoad& section : state.sections) {
         std::printf("  section[%zu] rom=0x%08X ram=0x%08X size=0x%08X %s - %s\n",

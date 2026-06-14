@@ -5,8 +5,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <dlfcn.h>
 #include <memory>
+#include <sys/mman.h>
 #include <sys/wait.h>
+#include <ucontext.h>
 #include <unistd.h>
 
 #include "recomp.h"
@@ -25,6 +28,8 @@ const char* default_rom_path() {
     return "/root/projects/007/baserom.u.z64";
 }
 
+uint8_t* g_signal_rdram = nullptr;
+
 bool entrypoint_probe_requested() {
     const char* value = std::getenv("GOLDENEYE_TRY_ENTRYPOINT");
     return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
@@ -34,6 +39,53 @@ void init_probe_context(recomp_context* ctx) {
     *ctx = recomp_context{};
     ctx->mips3_float_mode = 1;
     ctx->r29 = S32(0x807FF000u);
+}
+
+void entrypoint_signal_handler(int signal_number, siginfo_t* info, void* raw_context) {
+    uintptr_t pc = 0;
+#if defined(__x86_64__)
+    auto* uctx = reinterpret_cast<ucontext_t*>(raw_context);
+    pc = static_cast<uintptr_t>(uctx->uc_mcontext.gregs[REG_RIP]);
+#elif defined(__aarch64__)
+    auto* uctx = reinterpret_cast<ucontext_t*>(raw_context);
+    pc = static_cast<uintptr_t>(uctx->uc_mcontext.pc);
+#else
+    (void)raw_context;
+#endif
+    Dl_info dl_info{};
+    const bool has_symbol = pc != 0 && dladdr(reinterpret_cast<void*>(pc), &dl_info) != 0;
+    const auto symbol_offset = (has_symbol && dl_info.dli_saddr != nullptr)
+        ? static_cast<std::size_t>(pc - reinterpret_cast<uintptr_t>(dl_info.dli_saddr))
+        : 0;
+    const auto module_offset = (has_symbol && dl_info.dli_fbase != nullptr)
+        ? static_cast<std::size_t>(pc - reinterpret_cast<uintptr_t>(dl_info.dli_fbase))
+        : 0;
+    const auto fault_delta = (g_signal_rdram != nullptr && info != nullptr && info->si_addr != nullptr)
+        ? static_cast<long long>(reinterpret_cast<uint8_t*>(info->si_addr) - g_signal_rdram)
+        : 0LL;
+    std::fprintf(stderr,
+        "entrypoint_child_signal signal=%d fault_addr=%p fault_rdram_delta=%lld pc=0x%zx module_offset=0x%zx symbol=%s+0x%zx object=%s\n",
+        signal_number,
+        info ? info->si_addr : nullptr,
+        fault_delta,
+        static_cast<std::size_t>(pc),
+        module_offset,
+        has_symbol && dl_info.dli_sname ? dl_info.dli_sname : "(unknown)",
+        symbol_offset,
+        has_symbol && dl_info.dli_fname ? dl_info.dli_fname : "(unknown)");
+    std::fflush(stderr);
+    _exit(128 + signal_number);
+}
+
+void install_entrypoint_signal_handlers() {
+    struct sigaction action {};
+    action.sa_sigaction = entrypoint_signal_handler;
+    sigemptyset(&action.sa_mask);
+    action.sa_flags = SA_SIGINFO | SA_RESETHAND;
+    sigaction(SIGSEGV, &action, nullptr);
+    sigaction(SIGBUS, &action, nullptr);
+    sigaction(SIGILL, &action, nullptr);
+    sigaction(SIGABRT, &action, nullptr);
 }
 
 void maybe_run_guarded_entrypoint(uint8_t* rdram) {
@@ -55,6 +107,8 @@ void maybe_run_guarded_entrypoint(uint8_t* rdram) {
     }
 
     if (child == 0) {
+        g_signal_rdram = rdram;
+        install_entrypoint_signal_handlers();
         alarm(2);
         recomp_context ctx{};
         init_probe_context(&ctx);
@@ -83,9 +137,18 @@ void maybe_run_guarded_entrypoint(uint8_t* rdram) {
 } // namespace
 
 int main() {
-    auto backing = std::make_unique<uint8_t[]>(kGoldenEyeLowMirrorBytes + kGoldenEyeRdramSize);
-    std::memset(backing.get(), 0, kGoldenEyeLowMirrorBytes + kGoldenEyeRdramSize);
-    uint8_t* rdram = backing.get() + kGoldenEyeLowMirrorBytes;
+    void* mapping = mmap(nullptr,
+        kGoldenEyeHostAddressSpaceBytes,
+        PROT_READ | PROT_WRITE,
+        MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE,
+        -1,
+        0);
+    if (mapping == MAP_FAILED) {
+        std::fprintf(stderr, "failed to reserve sparse host address space: errno=%d\n", errno);
+        return 1;
+    }
+
+    uint8_t* rdram = static_cast<uint8_t*>(mapping);
     const char* rom_path = default_rom_path();
 
     GoldenEyeRuntimeState runtime_state{};
@@ -96,9 +159,10 @@ int main() {
         get_rom_name(),
         static_cast<unsigned long long>(get_entrypoint_address()));
     std::printf("rom_path=%s\n", rom_path);
-    std::printf("memory_layout=low_mirror:%zu+rdram:%zu runtime=%s\n",
-        kGoldenEyeLowMirrorBytes,
+    std::printf("host_address_space=%zu logical_rdram=%zu low_alias_span=%zu runtime=%s\n",
+        kGoldenEyeHostAddressSpaceBytes,
         kGoldenEyeRdramSize,
+        kGoldenEyeLowMirrorBytes,
         runtime_ok ? "boot-primitives" : "init-failed");
 
     if (!runtime_ok) {
@@ -114,6 +178,8 @@ int main() {
     } lookups[] = {
         {"recomp_entrypoint", 0x80000400u, false},
         {"boot", 0x80000450u, false},
+        {"init", 0x70000510u, false},
+        {"decompress_entry", 0x7020141Cu, false},
         {"get_csegmentSegmentStart", 0x700004BCu, true},
         {"return_null", 0x7F06C46Cu, true},
     };
@@ -180,6 +246,6 @@ int main() {
     maybe_run_guarded_entrypoint(rdram);
 
     std::printf("controlled_probe_result=OK boot_primitives_enabled safe_generated_dispatch_enabled\n");
-    std::printf("next_runtime_blocker=replace cooperative stubs with accurate scheduler/video/audio paths after guarded entrypoint diagnostics\n");
+    std::printf("next_runtime_blocker=implement cooperative generated main-thread dispatch and replace scheduler/video/audio stubs\n");
     return 0;
 }

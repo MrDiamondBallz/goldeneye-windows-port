@@ -22,6 +22,7 @@ struct GoldenEyeRuntimeState {
     std::size_t skipped_sections{};
     std::size_t copied_bytes{};
     std::size_t mapped_low_sections{};
+    std::size_t preloaded_cdata_bytes{};
 };
 
 struct GoldenEyeRuntimeDiagnostics {
@@ -37,6 +38,7 @@ struct GoldenEyeRuntimeDiagnostics {
 
 constexpr std::size_t kGoldenEyeRdramSize = 8 * 1024 * 1024;
 constexpr std::size_t kGoldenEyeLowMirrorBytes = 256 * 1024 * 1024;
+constexpr std::size_t kGoldenEyeHostAddressSpaceBytes = (std::size_t{4} * 1024 * 1024 * 1024) + kGoldenEyeRdramSize;
 
 bool goldeneye_runtime_init(uint8_t* rdram, std::size_t rdram_size, const char* rom_path, GoldenEyeRuntimeState* out_state);
 void goldeneye_runtime_print_state(const GoldenEyeRuntimeState& state);

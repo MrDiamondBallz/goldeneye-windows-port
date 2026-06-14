@@ -274,6 +274,22 @@ void osPiStartDma_recomp(uint8_t* rdram, recomp_context* ctx) {
     set_result(ctx, ok ? kOsOk : kOsError);
 }
 
+void osPiRawStartDma_recomp(uint8_t* rdram, recomp_context* ctx) {
+    const int32_t direction = static_cast<int32_t>(ctx->r4);
+    const uint32_t dev_addr = as_u32(ctx->r5);
+    const uint32_t vaddr = as_u32(ctx->r6);
+    const uint32_t nbytes = as_u32(ctx->r7);
+    bool ok = false;
+    if (direction == 0 || direction == 1) {
+        ok = goldeneye_runtime_copy_rom_to_vaddr(rdram, dev_addr, vaddr, nbytes);
+    }
+    set_result(ctx, ok ? kOsOk : kOsError);
+}
+
+void osPiGetStatus_recomp(uint8_t*, recomp_context* ctx) {
+    set_result(ctx, 0);
+}
+
 void osCreateThread_recomp(uint8_t* rdram, recomp_context* ctx) {
     ThreadRecord record{};
     record.thread = as_u32(ctx->r4);
