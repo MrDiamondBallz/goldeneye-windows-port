@@ -13,16 +13,16 @@ This is **not** an emulator frontend, and the repo does **not** ship game files.
 | Runtime memory | Sparse 4 GiB+ host address space mirrors N64Recomp low-address aliasing for `0x700...`, `0x7F...`, and KSEG0 access patterns. |
 | Boot path | Guarded execution reaches `recomp_entrypoint -> boot bridge -> generated init -> generated mainproc`. |
 | Runtime primitives | First-pass ROM DMA, message queues, cooperative thread records, VI framebuffer bookkeeping, timing helpers, and guarded probes are implemented. |
-| Current blocker | Guarded `mainproc` now advances through two host-simulated frame ticks, then reaches `guPerspectiveF` with missing view/camera state in the generated render path. |
+| Current blocker | Guarded `mainproc` now clears `guPerspectiveF`, reaches three host-simulated frame ticks, then an unbounded probe stalls in a runtime address-translation hot loop during scheduler/render progress. |
 
 Latest verified normal probe:
 
 ```text
 controlled_probe_result=OK boot_primitives_enabled safe_generated_dispatch_enabled
-next_runtime_blocker=guarded frame pump advances two ticks, then generated render path reaches guPerspectiveF with missing view/camera state
+next_runtime_blocker=guarded render path clears guPerspectiveF and reaches three host frame ticks; unbounded probe then stalls in runtime address-translation hot loop
 ```
 
-The game does **not** boot yet. The next milestone is valid view/camera/player bootstrap for the render path, plus real scheduler/video presentation behind the current probe-only frame tick.
+The game does **not** boot yet. The next milestone is replacing the hot scheduler/render translation loop with structured diagnostics or a tighter native presentation/RSP-task boundary so the probe can identify the next concrete render-runtime dependency.
 
 ## Legal boundary
 
@@ -103,9 +103,10 @@ The guarded probe forks a child process, installs signal diagnostics, and uses a
 - The original GoldenEye `boot` function mainly installs a low-address TLB mapping and jumps to `init`. The host runtime already supplies the aliasing, so the native bridge calls generated `init` directly.
 - The generated inflate/TLB path is not complete yet. The guarded child restores the local decomp ELF `.csegment` at the `initTLBPrepareContext` seam so generated main-thread code sees resolved game data while this layer is under construction.
 - `osCreateThread` / `osStartThread` currently record cooperative thread metadata. The guarded probe dispatches the recorded main thread (`id=3`, `mainproc`) once.
+- Probe contexts now initialize the N64Recomp odd-FPR pointer (`f_odd`) for MIPS3 float mode, which clears the previous `guPerspectiveF` crash.
 - Scheduler message reads can synthesize retrace messages for blocking waits, and `waitForNextFrame` is now a deterministic host frame tick that updates the original frame-counter globals.
 - Debug registry, early audio, memory-pool resizing, and generic compressed-asset expansion are probe-only placeholders so the guarded path can advance to the next major runtime seam.
-- Scheduler, video, audio, input, and controller behavior are still skeletal runtime replacements; the current guarded boundary is generated rendering setup at `guPerspectiveF`.
+- Scheduler, video, audio, input, and controller behavior are still skeletal runtime replacements; the current guarded boundary is a runtime address-translation hot loop after three frame ticks.
 
 ## Documentation
 

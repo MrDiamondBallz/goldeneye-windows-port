@@ -32,6 +32,7 @@ struct ThreadRecord {
 std::vector<ThreadRecord> g_threads;
 uint32_t g_vi_current_framebuffer = 0;
 uint32_t g_vi_next_framebuffer = 0;
+uint64_t g_host_counter_ticks = 0;
 bool g_sp_task_yielded = false;
 
 uint32_t as_u32(gpr value) {
@@ -53,10 +54,12 @@ uint32_t virtual_to_physical_u32(uint32_t addr) {
 }
 
 uint64_t host_counter_ticks() {
-    using clock = std::chrono::steady_clock;
-    static const auto start = clock::now();
-    const auto elapsed = clock::now() - start;
-    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count()) * 46u;
+    // Probe runtime timing must be deterministic. Advancing by roughly one NTSC
+    // main-loop interval per query keeps generated scheduler loops moving without
+    // relying on wall-clock sleeps inside guarded child probes.
+    constexpr uint64_t kHostCounterStep = 0x5EB61u;
+    g_host_counter_ticks += kHostCounterStep;
+    return g_host_counter_ticks;
 }
 
 bool can_access(uint8_t* rdram, uint32_t addr, std::size_t size) {
@@ -134,6 +137,7 @@ void generic_success(recomp_context* ctx) {
 
 void init_thread_context(recomp_context* ctx, const ThreadRecord& record) {
     *ctx = recomp_context{};
+    ctx->f_odd = &ctx->f1.u32l;
     ctx->mips3_float_mode = 1;
     ctx->r4 = sign32(record.arg);
     ctx->r29 = sign32(record.stack);

@@ -53,7 +53,8 @@ unsigned entrypoint_probe_timeout_seconds() {
 }
 
 void init_probe_context(recomp_context* ctx) {
-
+    *ctx = recomp_context{};
+    ctx->f_odd = &ctx->f1.u32l;
     ctx->mips3_float_mode = 1;
     ctx->r29 = S32(0x807FF000u);
 }
@@ -278,6 +279,6 @@ int main() {
     maybe_run_guarded_entrypoint(rdram);
 
     std::printf("controlled_probe_result=OK boot_primitives_enabled safe_generated_dispatch_enabled\n");
-    std::printf("next_runtime_blocker=guarded frame pump advances two ticks, then generated render path reaches guPerspectiveF with missing view/camera state\n");
+    std::printf("next_runtime_blocker=guarded render path clears guPerspectiveF and reaches three host frame ticks; unbounded probe then stalls in runtime address-translation hot loop\n");
     return 0;
 }
