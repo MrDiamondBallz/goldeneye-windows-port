@@ -1,5 +1,6 @@
 #include <cstdio>
 #include <cstdint>
+#include <cstring>
 
 #include "runtime.h"
 #include "funcs.h"
@@ -11,6 +12,12 @@ static void replaced_runtime_stub(const char* name, uint8_t*, recomp_context* ct
     if (ctx != nullptr) {
         ctx->r2 = 0;
     }
+}
+
+uint32_t g_host_memp_cursor = 0x80100000u;
+
+uint32_t align16(uint32_t value) {
+    return (value + 0xFu) & ~0xFu;
 }
 
 void sizepropdef(uint8_t* rdram, recomp_context* ctx) {
@@ -37,6 +44,110 @@ void initTLBPrepareContext(uint8_t* rdram, recomp_context* ctx) {
     // decompression step. The ELF is local-only and never committed.
     if (!goldeneye_runtime_preload_csegment_from_elf(rdram)) {
         std::fprintf(stderr, "runtime replacement warning: failed to restore local ELF csegment\n");
+    }
+}
+
+void debFind(uint8_t*, recomp_context* ctx) {
+    // The debug registry is nonessential for the native harness. Returning NULL
+    // keeps callers on their normal "not found" path without walking generated
+    // linked-list/string code while scheduler/video primitives are still stubbed.
+    if (ctx != nullptr) {
+        ctx->r2 = 0;
+    }
+}
+
+void debAllocate(uint8_t*, recomp_context* ctx) {
+    if (ctx != nullptr) {
+        ctx->r2 = 0;
+    }
+}
+
+void debAdd(uint8_t*, recomp_context* ctx) {
+    if (ctx != nullptr) {
+        ctx->r2 = 0;
+    }
+}
+
+void debTryAdd(uint8_t*, recomp_context* ctx) {
+    if (ctx != nullptr) {
+        ctx->r2 = 0;
+    }
+}
+
+void debInit(uint8_t*, recomp_context* ctx) {
+    if (ctx != nullptr) {
+        ctx->r2 = 0;
+    }
+}
+
+void alFxNew(uint8_t*, recomp_context* ctx) {
+    // Reverb/effect construction allocates and wires a large N64 audio graph.
+    // The native spike only needs audio init to be non-blocking until a host
+    // audio backend owns this path.
+    if (ctx != nullptr) {
+        ctx->r2 = 0;
+    }
+}
+
+void mempAllocBytesInBank(uint8_t* rdram, recomp_context* ctx) {
+    if (ctx == nullptr) {
+        return;
+    }
+
+    const uint32_t bytes = static_cast<uint32_t>(ctx->r4);
+    const uint32_t bank = static_cast<uint32_t>(ctx->r5 & 0xFFu);
+    const uint32_t allocation = align16(g_host_memp_cursor);
+    const uint32_t next = align16(allocation + bytes);
+
+    uint8_t* host_ptr = nullptr;
+    if (bytes == 0 || next <= allocation || next >= 0x803A0000u || !goldeneye_runtime_translate(rdram, allocation, bytes, &host_ptr)) {
+        std::fprintf(stderr,
+            "mempAllocBytesInBank host allocator failed bytes=0x%X bank=%u cursor=0x%08X\n",
+            bytes,
+            bank,
+            g_host_memp_cursor);
+        ctx->r2 = 0;
+        return;
+    }
+
+    std::memset(host_ptr, 0, bytes);
+    g_host_memp_cursor = next;
+    ctx->r2 = S32(allocation);
+}
+
+void mempAddEntryOfSizeToBank(uint8_t*, recomp_context* ctx) {
+    // The host allocator does not maintain the original bank-entry metadata yet.
+    // Treat resize bookkeeping as successful so callers can continue through the
+    // next runtime surface.
+    if (ctx != nullptr) {
+        ctx->r2 = 1;
+    }
+}
+
+void musicSeqPlayerInit(uint8_t*, recomp_context* ctx) {
+    // Audio bank loading pulls compressed asset data and builds the N64 synth
+    // graph. Skip it for now; the host audio backend will replace this whole
+    // path rather than relying on generated libaudio internals.
+    if (ctx != nullptr) {
+        ctx->r2 = 0;
+    }
+}
+
+void decompressdata(uint8_t*, recomp_context* ctx) {
+    // Placeholder for compressed asset expansion. Returning 0 is enough to keep
+    // early boot/main-thread probes moving to the next runtime boundary; real
+    // asset streaming needs a host implementation, not generated zlib on stubbed
+    // memory pools.
+    if (ctx != nullptr) {
+        ctx->r2 = 0;
+    }
+}
+
+void alCSeqNew(uint8_t*, recomp_context* ctx) {
+    // Sequence construction currently depends on audio assets that are intentionally
+    // skipped by the native spike. Treat it as a no-op until host audio exists.
+    if (ctx != nullptr) {
+        ctx->r2 = 0;
     }
 }
 

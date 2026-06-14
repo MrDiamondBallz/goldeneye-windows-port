@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <dlfcn.h>
 #include <fstream>
 #include <limits>
 #include <vector>
@@ -145,7 +146,20 @@ void recomp_syscall_handler(uint8_t*, recomp_context*, int32_t instruction_vram)
 }
 
 void pause_self(uint8_t*) {
-    std::fprintf(stderr, "pause_self stub\n");
+    void* return_address = __builtin_return_address(0);
+    Dl_info dl_info{};
+    const bool has_symbol = return_address != nullptr && dladdr(return_address, &dl_info) != 0;
+    const auto module_offset = (has_symbol && dl_info.dli_fbase != nullptr)
+        ? static_cast<std::size_t>(reinterpret_cast<std::uintptr_t>(return_address) - reinterpret_cast<std::uintptr_t>(dl_info.dli_fbase))
+        : 0;
+    std::fprintf(stderr,
+        "pause_self structured_blocker return_address=%p module_offset=0x%zx symbol=%s object=%s\n",
+        return_address,
+        module_offset,
+        has_symbol && dl_info.dli_sname ? dl_info.dli_sname : "(unknown)",
+        has_symbol && dl_info.dli_fname ? dl_info.dli_fname : "(unknown)");
+    std::fflush(stderr);
+    std::_Exit(140);
 }
 
 } // extern "C"
@@ -227,6 +241,7 @@ bool goldeneye_has_function_metadata(uint32_t vram) {
         case 0x7020141Cu: // decompress_entry
         case 0x7000089Cu: // mainproc
         case 0x70000718u: // idleproc
+        case 0x700025D8u: // amDmaNew
         case 0x700004BCu: // get_csegmentSegmentStart
         case 0x7F06C46Cu: // return_null
             return true;
@@ -249,6 +264,8 @@ recomp_func_t* goldeneye_lookup_function(uint32_t vram) {
             return mainproc;
         case 0x70000718u:
             return idleproc;
+        case 0x700025D8u:
+            return amDmaNew;
         case 0x700004BCu:
             return get_csegmentSegmentStart;
         case 0x7F06C46Cu:

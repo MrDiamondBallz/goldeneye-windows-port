@@ -32,6 +32,17 @@ void sizepropdef(uint8_t* rdram, recomp_context* ctx);
 void boot(uint8_t* rdram, recomp_context* ctx);
 void resolve_TLBaddress_for_InvalidHit(uint8_t* rdram, recomp_context* ctx);
 void initTLBPrepareContext(uint8_t* rdram, recomp_context* ctx);
+void debFind(uint8_t* rdram, recomp_context* ctx);
+void debAllocate(uint8_t* rdram, recomp_context* ctx);
+void debAdd(uint8_t* rdram, recomp_context* ctx);
+void debTryAdd(uint8_t* rdram, recomp_context* ctx);
+void debInit(uint8_t* rdram, recomp_context* ctx);
+void alFxNew(uint8_t* rdram, recomp_context* ctx);
+void mempAllocBytesInBank(uint8_t* rdram, recomp_context* ctx);
+void mempAddEntryOfSizeToBank(uint8_t* rdram, recomp_context* ctx);
+void musicSeqPlayerInit(uint8_t* rdram, recomp_context* ctx);
+void decompressdata(uint8_t* rdram, recomp_context* ctx);
+void alCSeqNew(uint8_t* rdram, recomp_context* ctx);
 void eqpower(uint8_t* rdram, recomp_context* ctx);
 
 #ifdef __cplusplus

@@ -37,6 +37,30 @@ ignored = [
     "boot",
     "resolve_TLBaddress_for_InvalidHit",
     "initTLBPrepareContext",
+    # Debug registry is safe to replace in the native harness. The generated
+    # version creates a linked list of debug entries and can stall the guarded
+    # main-thread probe in debFind/strcmp before scheduler/video work starts.
+    "debFind",
+    "debAllocate",
+    "debAdd",
+    "debTryAdd",
+    "debInit",
+    # Full reverb/effects construction is host-audio work. Keep the synth path
+    # moving with a no-op effect constructor until the native audio backend exists.
+    "alFxNew",
+    # Temporary host bump allocator for early native-runtime probes. The generated
+    # allocator currently reaches its panic self-loop because full memp bank setup
+    # is not modeled yet.
+    "mempAllocBytesInBank",
+    "mempAddEntryOfSizeToBank",
+    # Audio bank loading/decompression is skipped until the native audio backend
+    # and asset streaming model are in place.
+    "musicSeqPlayerInit",
+    # Generic compressed asset expansion is still a runtime/asset-streaming surface.
+    # No-op it for the probe instead of burning time in generated zlib with stubbed
+    # memory/audio state.
+    "decompressdata",
+    "alCSeqNew",
     # Mis-typed as FUNC in the decomp ELF but is a packed data table, not code.
     "eqpower",
 ]

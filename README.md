@@ -13,16 +13,16 @@ This is **not** an emulator frontend, and the repo does **not** ship game files.
 | Runtime memory | Sparse 4 GiB+ host address space mirrors N64Recomp low-address aliasing for `0x700...`, `0x7F...`, and KSEG0 access patterns. |
 | Boot path | Guarded execution reaches `recomp_entrypoint -> boot bridge -> generated init -> generated mainproc`. |
 | Runtime primitives | First-pass ROM DMA, message queues, cooperative thread records, VI framebuffer bookkeeping, timing helpers, and guarded probes are implemented. |
-| Current blocker | Generated `mainproc` dispatch reaches the debug `debFind` / `pause_self` path and times out under the guarded child-process probe. |
+| Current blocker | Generated `mainproc` dispatch now gets past the debug registry and early audio/asset setup, then reaches the first `waitForNextFrame` frame-pump boundary under the guarded child-process probe. |
 
 Latest verified normal probe:
 
 ```text
 controlled_probe_result=OK boot_primitives_enabled safe_generated_dispatch_enabled
-next_runtime_blocker=main-thread dispatch reaches debFind/pause_self debug path after local ELF csegment restore
+next_runtime_blocker=main-thread dispatch reaches waitForNextFrame frame pump; scheduler/video/audio host runtime still skeletal
 ```
 
-The game does **not** boot yet. The next milestone is to turn the debug `pause_self` path into a structured runtime blocker or seed the missing debug/assertion state so the main-thread probe can continue into scheduler/video/audio initialization.
+The game does **not** boot yet. The next milestone is a real host frame pump: scheduler/video timing, VI presentation, input/controller polling, and audio/asset streaming need native implementations instead of probe-only placeholders.
 
 ## Legal boundary
 
@@ -103,7 +103,8 @@ The guarded probe forks a child process, installs signal diagnostics, and uses a
 - The original GoldenEye `boot` function mainly installs a low-address TLB mapping and jumps to `init`. The host runtime already supplies the aliasing, so the native bridge calls generated `init` directly.
 - The generated inflate/TLB path is not complete yet. The guarded child restores the local decomp ELF `.csegment` at the `initTLBPrepareContext` seam so generated main-thread code sees resolved game data while this layer is under construction.
 - `osCreateThread` / `osStartThread` currently record cooperative thread metadata. The guarded probe dispatches the recorded main thread (`id=3`, `mainproc`) once.
-- `pause_self`, scheduler, video, audio, input, and controller behavior are still skeletal runtime replacements.
+- Debug registry, early audio, memory-pool resizing, and generic compressed-asset expansion are probe-only placeholders so the guarded path can advance to the next major runtime seam.
+- Scheduler, video, audio, input, and controller behavior are still skeletal runtime replacements; the current guarded boundary is `waitForNextFrame`.
 
 ## Documentation
 

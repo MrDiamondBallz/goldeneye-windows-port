@@ -36,11 +36,24 @@ uint32_t read_u32(uint8_t* rdram, uint32_t vaddr) {
 
 bool entrypoint_probe_requested() {
     const char* value = std::getenv("GOLDENEYE_TRY_ENTRYPOINT");
-    return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
+    return value != nullptr && value[0] != '\0' && value[0] != '0';
+}
+
+unsigned entrypoint_probe_timeout_seconds() {
+    const char* value = std::getenv("GOLDENEYE_ENTRYPOINT_TIMEOUT_SEC");
+    if (value == nullptr || value[0] == '\0') {
+        return 2;
+    }
+    char* end = nullptr;
+    const unsigned long parsed = std::strtoul(value, &end, 10);
+    if (end == value || parsed == 0 || parsed > 60) {
+        return 2;
+    }
+    return static_cast<unsigned>(parsed);
 }
 
 void init_probe_context(recomp_context* ctx) {
-    *ctx = recomp_context{};
+
     ctx->mips3_float_mode = 1;
     ctx->r29 = S32(0x807FF000u);
 }
@@ -115,7 +128,7 @@ void maybe_run_guarded_entrypoint(uint8_t* rdram) {
     if (child == 0) {
         g_signal_rdram = rdram;
         install_entrypoint_signal_handlers();
-        alarm(2);
+        alarm(entrypoint_probe_timeout_seconds());
         recomp_context ctx{};
         init_probe_context(&ctx);
         entry(rdram, &ctx);
@@ -198,6 +211,7 @@ int main() {
         {"decompress_entry", 0x7020141Cu, false},
         {"mainproc", 0x7000089Cu, false},
         {"idleproc", 0x70000718u, false},
+        {"amDmaNew", 0x700025D8u, false},
         {"get_csegmentSegmentStart", 0x700004BCu, true},
         {"return_null", 0x7F06C46Cu, true},
     };
@@ -264,6 +278,6 @@ int main() {
     maybe_run_guarded_entrypoint(rdram);
 
     std::printf("controlled_probe_result=OK boot_primitives_enabled safe_generated_dispatch_enabled\n");
-    std::printf("next_runtime_blocker=main-thread dispatch reaches debFind/pause_self debug path after local ELF csegment restore\n");
+    std::printf("next_runtime_blocker=main-thread dispatch reaches waitForNextFrame frame pump; scheduler/video/audio host runtime still skeletal\n");
     return 0;
 }
