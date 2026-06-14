@@ -257,17 +257,31 @@ scripts/build_goldeneye_native_spike.sh
 Verified output:
 
 ```text
-GoldenEye native spike
-rom=ge007.u.z64 entry=0xFFFFFFFF80000400 generated_code=linked
-rdram=8388608 bytes runtime=stub
+GoldenEye native boot harness spike
+rom_name=ge007.u.z64 entry=0xFFFFFFFF80000400 generated_lookup=callable
+rdram=8388608 bytes runtime=segment-loader
+sections: copied=1 skipped=4 copied_bytes=80
+metadata recomp_entrypoint 0x80000400 -> FOUND
+metadata get_csegmentSegmentStart 0x700004BC -> FOUND
+metadata return_null 0x7F06C46C -> FOUND
+controlled_probe_result=OK generated_lookup_functions_callable segment_loader_initialized
+next_runtime_blocker=implement libultra/hardware replacement symbols before deep generated-function dispatch or recomp_entrypoint
 ```
 
 The produced local binary is ignored and not committed:
 
 ```text
 ports/goldeneye/build-native-spike/goldeneye_native_spike
-SHA256 57726276d273eb9604cb12077513ddc20a9dd80cf712c4a51f7f0bdaf9efd927
+SHA256 7d9e060a32ee29d2f72b96ab573632dd46f3bdf4d7dcfc8059d2fc086095908d
 ```
 
-This proves the generated GoldenEye translation units compile and link into a native Linux x86-64 host executable against a stub runtime. It does **not** boot the game yet. The next blocker is runtime correctness: segment loading, RDRAM layout, hardware/TLB replacements, and a controlled call into GoldenEye code.
+This now proves:
+
+1. generated GoldenEye translation units still compile and link into a native Linux x86-64 host executable;
+2. the harness can open the local user-owned ROM and copy the direct `0x80000400` entry section into emulated RDRAM;
+3. low-address sections (`0x700...`, `0x7F...`) are detected as overlay/runtime-mapping work, not silently misloaded;
+4. generated lookup functions are callable;
+5. known function metadata for entrypoint / csegment start / null-return probes is resolved.
+
+It does **not** boot the game yet. The next blocker is implementing enough libultra/hardware replacement coverage and overlay mapping to safely dispatch deeper generated functions or `recomp_entrypoint`.
 

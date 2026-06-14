@@ -37,10 +37,11 @@ Required user-owned files are placed locally only under ignored paths such as `a
 - GoldenEye US N64Recomp codegen now completes with the tracked rodata jump-table patch and current config.
 - The generated code pass reports `14380` functions and emits 18 generated files locally under ignored `ports/goldeneye/generated/us_recomp/`.
 - Native host spike now compiles/links generated GoldenEye code into a Linux x86-64 executable with a stub runtime.
-- Latest verified native spike output: `rom=ge007.u.z64 entry=0xFFFFFFFF80000400 generated_code=linked`.
+- Boot harness spike now initializes a local segment loader, copies the direct KSEG0 entry section into RDRAM, records overlay metadata, and reports the next runtime blocker.
+- Latest verified native spike output: `controlled_probe_result=OK generated_lookup_functions_callable segment_loader_initialized`.
 - `N64ModernRuntime` and `RT64` are cloned for native runtime work.
 - RecompFrontend needs a proper consuming app/CMake scaffold before it can be built standalone.
 
 ## Immediate next milestone
 
-Move from a linked stub executable to a real boot harness: load ROM/decomp segments into RDRAM, implement required hardware/TLB/runtime replacements, and safely call a controlled GoldenEye entry/test function.
+Implement libultra/hardware replacement symbols and low-address overlay mapping so the harness can safely dispatch deeper generated functions and eventually call `recomp_entrypoint`.
