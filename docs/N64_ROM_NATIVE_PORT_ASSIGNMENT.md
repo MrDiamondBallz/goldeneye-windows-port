@@ -235,3 +235,39 @@ Remaining intentional ignores in `ge007_us_recomp.toml`:
 
 Next action: create the native app scaffold that compiles the generated C against a real `recomp.h`/runtime shim, then replace the ignored hardware/TLB functions with native runtime implementations where needed.
 
+## Native executable scaffold status
+
+A first host executable scaffold now exists:
+
+```text
+ports/goldeneye/app/CMakeLists.txt
+ports/goldeneye/app/main.cpp
+ports/goldeneye/runtime/recomp.h
+ports/goldeneye/runtime/runtime.cpp
+ports/goldeneye/runtime/stubs.cpp
+scripts/build_goldeneye_native_spike.sh
+```
+
+Verified command:
+
+```bash
+scripts/build_goldeneye_native_spike.sh
+```
+
+Verified output:
+
+```text
+GoldenEye native spike
+rom=ge007.u.z64 entry=0xFFFFFFFF80000400 generated_code=linked
+rdram=8388608 bytes runtime=stub
+```
+
+The produced local binary is ignored and not committed:
+
+```text
+ports/goldeneye/build-native-spike/goldeneye_native_spike
+SHA256 57726276d273eb9604cb12077513ddc20a9dd80cf712c4a51f7f0bdaf9efd927
+```
+
+This proves the generated GoldenEye translation units compile and link into a native Linux x86-64 host executable against a stub runtime. It does **not** boot the game yet. The next blocker is runtime correctness: segment loading, RDRAM layout, hardware/TLB replacements, and a controlled call into GoldenEye code.
+
