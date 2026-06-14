@@ -9,10 +9,15 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 set(N64RECOMP_DIR "/root/projects/goldeneye-pc-port/N64Recomp" CACHE PATH "Path to local N64Recomp checkout")
+set(N64MODERNRUNTIME_DIR "/root/projects/goldeneye-pc-port/N64ModernRuntime" CACHE PATH "Path to local N64ModernRuntime checkout")
 set(GE_GENERATED_DIR "${CMAKE_CURRENT_LIST_DIR}/../generated/us_recomp" CACHE PATH "Path to generated GoldenEye recomp output")
 
 if(NOT EXISTS "${N64RECOMP_DIR}/include/recomp.h")
   message(FATAL_ERROR "Missing N64Recomp include/recomp.h. Set -DN64RECOMP_DIR=/path/to/N64Recomp")
+endif()
+
+if(NOT EXISTS "${N64MODERNRUNTIME_DIR}/librecomp/include/librecomp/sections.h")
+  message(FATAL_ERROR "Missing N64ModernRuntime librecomp/sections.h. Set -DN64MODERNRUNTIME_DIR=/path/to/N64ModernRuntime")
 endif()
 
 if(NOT EXISTS "${GE_GENERATED_DIR}/funcs.h")
@@ -51,6 +56,7 @@ target_include_directories(goldeneye_runtime PUBLIC
   "${CMAKE_CURRENT_LIST_DIR}/../runtime"
   "${GE_GENERATED_DIR}"
   "${N64RECOMP_DIR}/include"
+  "${N64MODERNRUNTIME_DIR}/librecomp/include"
 )
 
 target_compile_definitions(goldeneye_runtime PUBLIC
@@ -68,8 +74,8 @@ target_include_directories(goldeneye_native_spike PRIVATE
 )
 
 target_link_libraries(goldeneye_native_spike PRIVATE
-  goldeneye_runtime
   goldeneye_recomp_generated
+  goldeneye_runtime
   m
 )
 
