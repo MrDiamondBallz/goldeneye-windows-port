@@ -1,0 +1,37 @@
+diff --git a/src/analysis.cpp b/src/analysis.cpp
+index 9eaaa30..d875c2a 100644
+--- a/src/analysis.cpp
++++ b/src/analysis.cpp
+@@ -314,14 +314,26 @@ bool N64Recomp::analyze_function(const N64Recomp::Context& context, const N64Rec
+             end_address = stats.jump_tables[i + 1].vram;
+         }
+ 
+-        // TODO this assumes that the jump table is in the same section as the function itself
+-        cur_jtbl.rom = cur_jtbl.vram + func.rom - func.vram;
+-        cur_jtbl.section_index = func.section_index;
++        // Jump tables are often emitted into a separate rodata/data section from the
++        // function that uses them. Resolve the table's own section instead of assuming
++        // it lives next to the function body.
++        const Section* jtbl_section = section;
++        uint16_t jtbl_section_index = func.section_index;
++        for (uint16_t section_index = 0; section_index < context.sections.size(); section_index++) {
++            const Section& candidate_section = context.sections[section_index];
++            if (cur_jtbl.vram >= candidate_section.ram_addr && cur_jtbl.vram < candidate_section.ram_addr + candidate_section.size) {
++                jtbl_section = &candidate_section;
++                jtbl_section_index = section_index;
++                break;
++            }
++        }
++
++        cur_jtbl.rom = cur_jtbl.vram + jtbl_section->rom_addr - jtbl_section->ram_addr;
++        cur_jtbl.section_index = jtbl_section_index;
+ 
+         while (vram < end_address) {
+-            // Retrieve the current entry of the jump table
+-            // TODO same as above
+-            uint32_t rom_addr = vram + func.rom - func.vram;
++            // Retrieve the current entry of the jump table from the table's section.
++            uint32_t rom_addr = vram + jtbl_section->rom_addr - jtbl_section->ram_addr;
+             uint32_t jtbl_word = byteswap(*reinterpret_cast<const uint32_t*>(&context.rom[rom_addr]));
+ 
+             if (cur_jtbl.got_offset.has_value() && got_ram_addr.has_value()) {

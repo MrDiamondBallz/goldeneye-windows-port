@@ -1,0 +1,43 @@
+# GoldenEye 007 USA N64Recomp config spike
+#
+# This is a private/local scaffold for turning the verified N64 decomp ELF + ROM
+# into N64Recomp C output. Generated output is ignored and must not be committed.
+
+[input]
+entrypoint = 0x80000400
+elf_path = "../../../../007/build/u/ge007.u.elf"
+rom_file_path = "../../../../007/baserom.u.z64"
+output_func_path = "../generated/us_recomp"
+
+# GoldenEye's ELF is MIPS3/o32 and the ROM header entrypoint is 0x80000400.
+uses_mips3_float_mode = true
+
+# Keep output chunked enough for early inspection/build experiments.
+functions_per_output_file = 200
+
+# Start simple: parse ELF symbols/sections first. mdebug mapping can be added
+# once we know which source/overlay names matter for native build hygiene.
+use_mdebug = false
+unpaired_lo16_warnings = true
+
+# Default include used by generated files. The app scaffold must provide this.
+recomp_include = "#include \"recomp.h\""
+
+[patches]
+stubs = []
+
+# First known N64Recomp analysis blocker from the raw GoldenEye ELF:
+# sizepropdef uses a switch/jump table whose size is not inferred from the ELF/rodata
+# layout yet. Keep it ignored for the initial scaffold spike; later solve properly
+# with better symbol/rodata metadata or a targeted patch.
+# boot touches low-level N64 cop0/PI/boot hardware and is not part of the native
+# app entry path; the port runtime will replace that initialization layer.
+ignored = [
+    "sizepropdef",
+    "boot",
+    "resolve_TLBaddress_for_InvalidHit",
+    "initTLBPrepareContext",
+    # Mis-typed as FUNC in the decomp ELF but is a packed data table, not code.
+    "eqpower",
+]
+renamed = []

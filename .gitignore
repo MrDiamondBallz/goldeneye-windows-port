@@ -1,0 +1,49 @@
+# Private/user-owned commercial game assets — never commit
+assets/*
+!assets/README.md
+*.z64
+*.n64
+*.v64
+*.rom
+*.bin
+*.xex
+*.iso
+*.wad
+*.sav
+*.eep
+*.sra
+*.fla
+
+# Public-domain / explicitly redistributable ROM fixtures are allowed here.
+# Every committed ROM in this tree must include source/license notes.
+!test-roms/
+!test-roms/README.md
+!test-roms/public-domain/
+!test-roms/public-domain/**
+
+# Generated recompilation output
+generated/
+build/
+build-*/
+out/
+dist/
+*.obj
+*.o
+*.pdb
+*.ilk
+*.exe
+*.dll
+*.lib
+*.a
+
+# Local clones/toolchains
+third_party/
+upstream/
+.local/
+.env
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
