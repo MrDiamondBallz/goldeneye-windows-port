@@ -259,31 +259,41 @@ Verified output:
 ```text
 GoldenEye native boot harness spike
 rom_name=ge007.u.z64 entry=0xFFFFFFFF80000400 generated_lookup=callable
-rdram=8388608 bytes runtime=segment-loader
-sections: copied=1 skipped=4 copied_bytes=80
+memory_layout=low_mirror:268435456+rdram:8388608 runtime=boot-primitives
+sections: copied=4 skipped=1 copied_bytes=1068160 low_mapped=3
 metadata recomp_entrypoint 0x80000400 -> FOUND dispatch=DEFERRED
+metadata boot 0x80000450 -> FOUND dispatch=ENABLED
 metadata get_csegmentSegmentStart 0x700004BC -> FOUND dispatch=ENABLED
 probe get_csegmentSegmentStart -> OK r2=0xFFFFFFFF80020D90 sp=0xFFFFFFFF807FF000
 metadata return_null 0x7F06C46C -> FOUND dispatch=ENABLED
 probe return_null -> OK r2=0x0000000000000000 sp=0xFFFFFFFF807FF000
-controlled_probe_result=OK safe_generated_dispatch_enabled segment_loader_initialized
-next_runtime_blocker=implement broader libultra/hardware replacement coverage before recomp_entrypoint
+runtime_primitives: rom_bytes=12582912 dma_copies=5 dma_bytes=1068224 queues_created=1 messages_sent=2 messages_received=1 threads_created=1 threads_started=1
+entrypoint_probe=skipped set GOLDENEYE_TRY_ENTRYPOINT=1 to attempt guarded child process
+controlled_probe_result=OK boot_primitives_enabled safe_generated_dispatch_enabled
+```
+
+Guarded entrypoint probe:
+
+```text
+GOLDENEYE_TRY_ENTRYPOINT=1 ports/goldeneye/build-native-spike/goldeneye_native_spike
+runtime replacement stub called: boot
+entrypoint_probe=attempted child_exit=0
 ```
 
 The produced local binary is ignored and not committed:
 
 ```text
 ports/goldeneye/build-native-spike/goldeneye_native_spike
-SHA256 bc8d5dc50d368e041075f117304c73af48203db9c53f6ef486891415c125cfdc
+SHA256 3690869c574faf47dbdbd2cb9346f3f9ace6f13bea49f50393034f1d6e316ee8
 ```
 
 This now proves:
 
 1. generated GoldenEye translation units still compile and link into a native Linux x86-64 host executable;
-2. the harness can open the local user-owned ROM and copy the direct `0x80000400` entry section into emulated RDRAM;
-3. low-address sections (`0x700...`, `0x7F...`) are detected as overlay/runtime-mapping work, not silently misloaded;
-4. first-pass libultra/hardware replacement symbols link the generated objects needed for safe dispatch;
-5. safe generated functions dispatch and execute through `goldeneye_lookup_function`.
+2. the harness can open the local user-owned ROM and map the direct `0x80000400` section plus the low-address `0x700...` / `0x7F...` sections into host memory;
+3. first-pass ROM DMA, message queue, cooperative thread, VI framebuffer, and timing primitives execute in the host runtime;
+4. safe generated functions dispatch and execute through `goldeneye_lookup_function`;
+5. guarded `recomp_entrypoint` dispatch is isolated in a child process and currently reaches the intentional `boot` replacement seam cleanly.
 
-It does **not** boot the game yet. The next blocker is expanding replacement coverage and overlay mapping enough to safely dispatch deeper generated functions or `recomp_entrypoint`.
+It does **not** boot the game yet. The next blocker is replacing the `boot` seam and cooperative stubs with accurate scheduler/video/audio/runtime behavior so guarded entrypoint execution can progress into real game initialization.
 

@@ -37,12 +37,13 @@ Required user-owned files are placed locally only under ignored paths such as `a
 - GoldenEye US N64Recomp codegen now completes with the tracked rodata jump-table patch and current config.
 - The generated code pass reports `14380` functions and emits 18 generated files locally under ignored `ports/goldeneye/generated/us_recomp/`.
 - Native host spike now compiles/links generated GoldenEye code into a Linux x86-64 executable with a stub runtime.
-- Boot harness spike now initializes a local segment loader, copies the direct KSEG0 entry section into RDRAM, records overlay metadata, and reports the next runtime blocker.
-- First libultra/hardware replacement layer now links generated dispatch for safe probes: `get_csegmentSegmentStart` and `return_null` execute through `goldeneye_lookup_function`.
-- Latest verified native spike output: `controlled_probe_result=OK safe_generated_dispatch_enabled segment_loader_initialized`.
+- Boot harness now allocates a low-address host mirror and maps GoldenEye's `0x700...` / `0x7F...` sections instead of skipping them.
+- First boot-grade runtime primitives are enabled: ROM DMA copy, message queues, cooperative thread records, VI framebuffer bookkeeping, and guarded entrypoint probing.
+- Latest verified native spike output: `controlled_probe_result=OK boot_primitives_enabled safe_generated_dispatch_enabled`.
+- Guarded `GOLDENEYE_TRY_ENTRYPOINT=1` probe reaches the `boot` replacement seam and exits cleanly; the real boot body is still intentionally stubbed.
 - `N64ModernRuntime` and `RT64` are cloned for native runtime work.
 - RecompFrontend needs a proper consuming app/CMake scaffold before it can be built standalone.
 
 ## Immediate next milestone
 
-Expand replacement coverage and overlay mapping enough to dispatch deeper generated functions, then attempt a guarded `recomp_entrypoint` call.
+Replace the `boot` seam and cooperative stubs with accurate scheduler/video/audio paths, then let guarded `recomp_entrypoint` progress into real game initialization.

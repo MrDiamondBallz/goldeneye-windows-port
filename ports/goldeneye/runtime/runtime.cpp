@@ -21,9 +21,6 @@ struct LocalSectionInfo {
     std::size_t index;
 };
 
-// Lightweight metadata copied from generated recomp_overlays.inl without pulling
-// the full function table into this runtime object. Pulling that table references
-// ignored/libultra replacement symbols before the runtime shim is ready.
 constexpr LocalSectionInfo kSections[] = {
     {0x00001000u, 0x80000400u, 0x00000050u, 3},
     {0x00001050u, 0x70000450u, 0x00020940u, 4},
@@ -35,35 +32,49 @@ constexpr LocalSectionInfo kSections[] = {
 constexpr std::size_t kNumSections = 29;
 
 std::vector<int32_t> g_section_address_storage;
+std::vector<uint8_t> g_rom_bytes;
+GoldenEyeRuntimeDiagnostics g_diag{};
 
-bool vram_to_rdram_offset(uint32_t vram, std::size_t rdram_size, std::size_t* out_offset) {
-    uint32_t offset = 0;
-
-    if (vram >= 0x80000000u && vram < 0x80800000u) {
-        offset = vram - 0x80000000u;
-    } else if (vram >= 0xA0000000u && vram < 0xA0800000u) {
-        offset = vram - 0xA0000000u;
-    } else {
-        return false;
-    }
-
-    if (offset >= rdram_size) {
-        return false;
-    }
-
-    *out_offset = offset;
-    return true;
+bool entrypoint_dispatch_enabled() {
+    const char* value = std::getenv("GOLDENEYE_TRY_ENTRYPOINT");
+    return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
 }
 
-std::size_t safe_copy_size(uint32_t section_size, std::size_t offset, std::size_t rdram_size, std::size_t rom_addr, std::size_t rom_size) {
-    std::size_t size = section_size;
-    size = std::min(size, rdram_size - offset);
-    if (rom_addr < rom_size) {
-        size = std::min(size, rom_size - rom_addr);
-    } else {
-        size = 0;
+int64_t runtime_offset_for_vaddr(uint32_t vaddr) {
+    if (vaddr >= 0x80000000u && vaddr < 0x80800000u) {
+        return static_cast<int64_t>(vaddr - 0x80000000u);
     }
-    return size;
+    if (vaddr >= 0xA0000000u && vaddr < 0xA0800000u) {
+        return static_cast<int64_t>(vaddr - 0xA0000000u);
+    }
+    if (vaddr >= 0x70000000u && vaddr < 0x80000000u) {
+        return static_cast<int64_t>(vaddr) - static_cast<int64_t>(0x80000000u);
+    }
+    return std::numeric_limits<int64_t>::min();
+}
+
+bool load_rom_file(const char* rom_path) {
+    std::ifstream rom(rom_path, std::ios::binary | std::ios::ate);
+    if (!rom) {
+        std::fprintf(stderr, "Failed to open ROM path for local-only segment load: %s\n", rom_path);
+        return false;
+    }
+
+    const std::streamoff rom_size_signed = rom.tellg();
+    if (rom_size_signed < 0) {
+        std::fprintf(stderr, "Failed to determine ROM size: %s\n", rom_path);
+        return false;
+    }
+
+    g_rom_bytes.assign(static_cast<std::size_t>(rom_size_signed), 0);
+    rom.seekg(0, std::ios::beg);
+    if (!g_rom_bytes.empty() && !rom.read(reinterpret_cast<char*>(g_rom_bytes.data()), static_cast<std::streamsize>(g_rom_bytes.size()))) {
+        std::fprintf(stderr, "Failed to read ROM bytes: %s\n", rom_path);
+        g_rom_bytes.clear();
+        return false;
+    }
+    g_diag.rom_bytes = g_rom_bytes.size();
+    return true;
 }
 
 } // namespace
@@ -102,9 +113,76 @@ void pause_self(uint8_t*) {
 
 } // extern "C"
 
+bool goldeneye_runtime_translate(uint8_t* rdram, uint32_t vaddr, std::size_t size, uint8_t** out_ptr) {
+    if (rdram == nullptr || out_ptr == nullptr) {
+        return false;
+    }
+
+    const int64_t offset = runtime_offset_for_vaddr(vaddr);
+    if (offset == std::numeric_limits<int64_t>::min()) {
+        return false;
+    }
+
+    const int64_t signed_size = static_cast<int64_t>(size);
+    const int64_t min_offset = -static_cast<int64_t>(kGoldenEyeLowMirrorBytes);
+    const int64_t max_offset = static_cast<int64_t>(kGoldenEyeRdramSize);
+    if (offset < min_offset || signed_size < 0 || offset + signed_size > max_offset) {
+        return false;
+    }
+
+    *out_ptr = rdram + offset;
+    return true;
+}
+
+bool goldeneye_runtime_copy_rom_to_vaddr(uint8_t* rdram, uint32_t rom_addr, uint32_t vaddr, std::size_t size) {
+    if (rom_addr > g_rom_bytes.size() || size > g_rom_bytes.size() - rom_addr) {
+        return false;
+    }
+
+    uint8_t* dest = nullptr;
+    if (!goldeneye_runtime_translate(rdram, vaddr, size, &dest)) {
+        return false;
+    }
+
+    if (size != 0) {
+        std::memcpy(dest, g_rom_bytes.data() + rom_addr, size);
+    }
+    g_diag.dma_copies++;
+    g_diag.dma_bytes += size;
+    return true;
+}
+
+std::size_t goldeneye_runtime_rom_size() {
+    return g_rom_bytes.size();
+}
+
+GoldenEyeRuntimeDiagnostics goldeneye_runtime_get_diagnostics() {
+    return g_diag;
+}
+
+void goldeneye_runtime_print_diagnostics() {
+    const GoldenEyeRuntimeDiagnostics diag = goldeneye_runtime_get_diagnostics();
+    std::printf("runtime_primitives: rom_bytes=%zu dma_copies=%zu dma_bytes=%zu queues_created=%zu messages_sent=%zu messages_received=%zu threads_created=%zu threads_started=%zu\n",
+        diag.rom_bytes,
+        diag.dma_copies,
+        diag.dma_bytes,
+        diag.queues_created,
+        diag.messages_sent,
+        diag.messages_received,
+        diag.threads_created,
+        diag.threads_started);
+}
+
+void goldeneye_runtime_record_queue_created() { g_diag.queues_created++; }
+void goldeneye_runtime_record_message_sent() { g_diag.messages_sent++; }
+void goldeneye_runtime_record_message_received() { g_diag.messages_received++; }
+void goldeneye_runtime_record_thread_created() { g_diag.threads_created++; }
+void goldeneye_runtime_record_thread_started() { g_diag.threads_started++; }
+
 bool goldeneye_has_function_metadata(uint32_t vram) {
     switch (vram) {
         case 0x80000400u: // recomp_entrypoint
+        case 0x80000450u: // boot replacement seam
         case 0x700004BCu: // get_csegmentSegmentStart
         case 0x7F06C46Cu: // return_null
             return true;
@@ -115,10 +193,14 @@ bool goldeneye_has_function_metadata(uint32_t vram) {
 
 recomp_func_t* goldeneye_lookup_function(uint32_t vram) {
     switch (vram) {
-        // Keep the full entrypoint metadata-only until the boot/TLB/libultra
-        // replacement layer is deeper. Safe leaf probes can dispatch now.
-        case 0x700004BCu: return get_csegmentSegmentStart;
-        case 0x7F06C46Cu: return return_null;
+        case 0x80000400u:
+            return entrypoint_dispatch_enabled() ? recomp_entrypoint : nullptr;
+        case 0x80000450u:
+            return boot;
+        case 0x700004BCu:
+            return get_csegmentSegmentStart;
+        case 0x7F06C46Cu:
+            return return_null;
         default:
             if (!goldeneye_has_function_metadata(vram)) {
                 std::fprintf(stderr, "LOOKUP_FUNC unresolved by lightweight harness: vram=0x%08X\n", vram);
@@ -128,14 +210,12 @@ recomp_func_t* goldeneye_lookup_function(uint32_t vram) {
 }
 
 bool goldeneye_runtime_init(uint8_t* rdram, std::size_t rdram_size, const char* rom_path, GoldenEyeRuntimeState* out_state) {
-    if (rdram == nullptr || rom_path == nullptr || out_state == nullptr) {
+    if (rdram == nullptr || rom_path == nullptr || out_state == nullptr || rdram_size != kGoldenEyeRdramSize) {
         return false;
     }
 
-    out_state->sections.clear();
-    out_state->copied_sections = 0;
-    out_state->skipped_sections = 0;
-    out_state->copied_bytes = 0;
+    *out_state = GoldenEyeRuntimeState{};
+    g_diag = GoldenEyeRuntimeDiagnostics{};
 
     g_section_address_storage.assign(kNumSections, 0);
     for (const LocalSectionInfo& section : kSections) {
@@ -145,18 +225,9 @@ bool goldeneye_runtime_init(uint8_t* rdram, std::size_t rdram_size, const char* 
     }
     section_addresses = g_section_address_storage.data();
 
-    std::ifstream rom(rom_path, std::ios::binary | std::ios::ate);
-    if (!rom) {
-        std::fprintf(stderr, "Failed to open ROM path for local-only segment load: %s\n", rom_path);
+    if (!load_rom_file(rom_path)) {
         return false;
     }
-
-    const std::streamoff rom_size_signed = rom.tellg();
-    if (rom_size_signed < 0) {
-        std::fprintf(stderr, "Failed to determine ROM size: %s\n", rom_path);
-        return false;
-    }
-    const std::size_t rom_size = static_cast<std::size_t>(rom_size_signed);
 
     for (const LocalSectionInfo& section : kSections) {
         GoldenEyeSectionLoad load{};
@@ -165,37 +236,22 @@ bool goldeneye_runtime_init(uint8_t* rdram, std::size_t rdram_size, const char* 
         load.ram_addr = section.ram_addr;
         load.size = section.size;
 
-        std::size_t rdram_offset = 0;
-        if (!vram_to_rdram_offset(section.ram_addr, rdram_size, &rdram_offset)) {
-            load.copied_to_rdram = false;
-            load.note = "not in direct KSEG0/KSEG1 RDRAM window; runtime overlay mapping still needed";
+        const bool is_low_mirror = section.ram_addr >= 0x70000000u && section.ram_addr < 0x80000000u;
+        if (!goldeneye_runtime_copy_rom_to_vaddr(rdram, section.rom_addr, section.ram_addr, section.size)) {
+            load.copied_to_runtime_memory = false;
+            load.note = "section does not fit in local ROM/runtime memory bounds";
             out_state->skipped_sections++;
             out_state->sections.push_back(std::move(load));
             continue;
         }
 
-        const std::size_t copy_size = safe_copy_size(section.size, rdram_offset, rdram_size, section.rom_addr, rom_size);
-        if (copy_size == 0 || copy_size < section.size) {
-            load.copied_to_rdram = false;
-            load.note = "section does not fit in local ROM/RDRAM bounds";
-            out_state->skipped_sections++;
-            out_state->sections.push_back(std::move(load));
-            continue;
-        }
-
-        rom.seekg(static_cast<std::streamoff>(section.rom_addr), std::ios::beg);
-        if (!rom.read(reinterpret_cast<char*>(rdram + rdram_offset), static_cast<std::streamsize>(copy_size))) {
-            load.copied_to_rdram = false;
-            load.note = "ROM read failed";
-            out_state->skipped_sections++;
-            out_state->sections.push_back(std::move(load));
-            continue;
-        }
-
-        load.copied_to_rdram = true;
-        load.note = "copied to RDRAM";
+        load.copied_to_runtime_memory = true;
+        load.note = is_low_mirror ? "mapped into low-address host mirror" : "copied to RDRAM";
         out_state->copied_sections++;
-        out_state->copied_bytes += copy_size;
+        out_state->copied_bytes += section.size;
+        if (is_low_mirror) {
+            out_state->mapped_low_sections++;
+        }
         out_state->sections.push_back(std::move(load));
     }
 
@@ -203,10 +259,11 @@ bool goldeneye_runtime_init(uint8_t* rdram, std::size_t rdram_size, const char* 
 }
 
 void goldeneye_runtime_print_state(const GoldenEyeRuntimeState& state) {
-    std::printf("sections: copied=%zu skipped=%zu copied_bytes=%zu\n",
+    std::printf("sections: copied=%zu skipped=%zu copied_bytes=%zu low_mapped=%zu\n",
         state.copied_sections,
         state.skipped_sections,
-        state.copied_bytes);
+        state.copied_bytes,
+        state.mapped_low_sections);
 
     for (const GoldenEyeSectionLoad& section : state.sections) {
         std::printf("  section[%zu] rom=0x%08X ram=0x%08X size=0x%08X %s - %s\n",
@@ -214,7 +271,7 @@ void goldeneye_runtime_print_state(const GoldenEyeRuntimeState& state) {
             section.rom_addr,
             section.ram_addr,
             section.size,
-            section.copied_to_rdram ? "COPIED" : "SKIPPED",
+            section.copied_to_runtime_memory ? "COPIED" : "SKIPPED",
             section.note.c_str());
     }
 }
