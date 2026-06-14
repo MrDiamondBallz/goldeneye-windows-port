@@ -114,15 +114,17 @@ bool goldeneye_has_function_metadata(uint32_t vram) {
 }
 
 recomp_func_t* goldeneye_lookup_function(uint32_t vram) {
-    // Keep this lightweight harness metadata-only for now. Returning direct
-    // generated function pointers here pulls full generated translation units
-    // into the host binary and exposes the next real blocker: libultra/hardware
-    // replacement symbols. The boot harness proves segment load + metadata
-    // resolution first; full dynamic dispatch comes after replacement coverage.
-    if (!goldeneye_has_function_metadata(vram)) {
-        std::fprintf(stderr, "LOOKUP_FUNC unresolved by lightweight harness: vram=0x%08X\n", vram);
+    switch (vram) {
+        // Keep the full entrypoint metadata-only until the boot/TLB/libultra
+        // replacement layer is deeper. Safe leaf probes can dispatch now.
+        case 0x700004BCu: return get_csegmentSegmentStart;
+        case 0x7F06C46Cu: return return_null;
+        default:
+            if (!goldeneye_has_function_metadata(vram)) {
+                std::fprintf(stderr, "LOOKUP_FUNC unresolved by lightweight harness: vram=0x%08X\n", vram);
+            }
+            return nullptr;
     }
-    return nullptr;
 }
 
 bool goldeneye_runtime_init(uint8_t* rdram, std::size_t rdram_size, const char* rom_path, GoldenEyeRuntimeState* out_state) {

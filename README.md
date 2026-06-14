@@ -38,10 +38,11 @@ Required user-owned files are placed locally only under ignored paths such as `a
 - The generated code pass reports `14380` functions and emits 18 generated files locally under ignored `ports/goldeneye/generated/us_recomp/`.
 - Native host spike now compiles/links generated GoldenEye code into a Linux x86-64 executable with a stub runtime.
 - Boot harness spike now initializes a local segment loader, copies the direct KSEG0 entry section into RDRAM, records overlay metadata, and reports the next runtime blocker.
-- Latest verified native spike output: `controlled_probe_result=OK generated_lookup_functions_callable segment_loader_initialized`.
+- First libultra/hardware replacement layer now links generated dispatch for safe probes: `get_csegmentSegmentStart` and `return_null` execute through `goldeneye_lookup_function`.
+- Latest verified native spike output: `controlled_probe_result=OK safe_generated_dispatch_enabled segment_loader_initialized`.
 - `N64ModernRuntime` and `RT64` are cloned for native runtime work.
 - RecompFrontend needs a proper consuming app/CMake scaffold before it can be built standalone.
 
 ## Immediate next milestone
 
-Implement libultra/hardware replacement symbols and low-address overlay mapping so the harness can safely dispatch deeper generated functions and eventually call `recomp_entrypoint`.
+Expand replacement coverage and overlay mapping enough to dispatch deeper generated functions, then attempt a guarded `recomp_entrypoint` call.

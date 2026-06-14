@@ -56,13 +56,26 @@ int main() {
     };
 
     for (const MetadataProbe& lookup : lookups) {
-        std::printf("metadata %s 0x%08X -> %s\n",
+        recomp_func_t* func = goldeneye_lookup_function(lookup.vram);
+        std::printf("metadata %s 0x%08X -> %s dispatch=%s\n",
             lookup.name,
             lookup.vram,
-            goldeneye_has_function_metadata(lookup.vram) ? "FOUND" : "MISSING");
+            goldeneye_has_function_metadata(lookup.vram) ? "FOUND" : "MISSING",
+            func ? "ENABLED" : "DEFERRED");
+
+        if (func != nullptr) {
+            recomp_context ctx{};
+            ctx.mips3_float_mode = 1;
+            ctx.r29 = S32(0x807FF000u);
+            func(rdram.get(), &ctx);
+            std::printf("probe %s -> OK r2=0x%016llX sp=0x%016llX\n",
+                lookup.name,
+                static_cast<unsigned long long>(ctx.r2),
+                static_cast<unsigned long long>(ctx.r29));
+        }
     }
 
-    std::printf("controlled_probe_result=OK generated_lookup_functions_callable segment_loader_initialized\n");
-    std::printf("next_runtime_blocker=implement libultra/hardware replacement symbols before deep generated-function dispatch or recomp_entrypoint\n");
+    std::printf("controlled_probe_result=OK safe_generated_dispatch_enabled segment_loader_initialized\n");
+    std::printf("next_runtime_blocker=implement broader libultra/hardware replacement coverage before recomp_entrypoint\n");
     return 0;
 }

@@ -261,18 +261,20 @@ GoldenEye native boot harness spike
 rom_name=ge007.u.z64 entry=0xFFFFFFFF80000400 generated_lookup=callable
 rdram=8388608 bytes runtime=segment-loader
 sections: copied=1 skipped=4 copied_bytes=80
-metadata recomp_entrypoint 0x80000400 -> FOUND
-metadata get_csegmentSegmentStart 0x700004BC -> FOUND
-metadata return_null 0x7F06C46C -> FOUND
-controlled_probe_result=OK generated_lookup_functions_callable segment_loader_initialized
-next_runtime_blocker=implement libultra/hardware replacement symbols before deep generated-function dispatch or recomp_entrypoint
+metadata recomp_entrypoint 0x80000400 -> FOUND dispatch=DEFERRED
+metadata get_csegmentSegmentStart 0x700004BC -> FOUND dispatch=ENABLED
+probe get_csegmentSegmentStart -> OK r2=0xFFFFFFFF80020D90 sp=0xFFFFFFFF807FF000
+metadata return_null 0x7F06C46C -> FOUND dispatch=ENABLED
+probe return_null -> OK r2=0x0000000000000000 sp=0xFFFFFFFF807FF000
+controlled_probe_result=OK safe_generated_dispatch_enabled segment_loader_initialized
+next_runtime_blocker=implement broader libultra/hardware replacement coverage before recomp_entrypoint
 ```
 
 The produced local binary is ignored and not committed:
 
 ```text
 ports/goldeneye/build-native-spike/goldeneye_native_spike
-SHA256 7d9e060a32ee29d2f72b96ab573632dd46f3bdf4d7dcfc8059d2fc086095908d
+SHA256 bc8d5dc50d368e041075f117304c73af48203db9c53f6ef486891415c125cfdc
 ```
 
 This now proves:
@@ -280,8 +282,8 @@ This now proves:
 1. generated GoldenEye translation units still compile and link into a native Linux x86-64 host executable;
 2. the harness can open the local user-owned ROM and copy the direct `0x80000400` entry section into emulated RDRAM;
 3. low-address sections (`0x700...`, `0x7F...`) are detected as overlay/runtime-mapping work, not silently misloaded;
-4. generated lookup functions are callable;
-5. known function metadata for entrypoint / csegment start / null-return probes is resolved.
+4. first-pass libultra/hardware replacement symbols link the generated objects needed for safe dispatch;
+5. safe generated functions dispatch and execute through `goldeneye_lookup_function`.
 
-It does **not** boot the game yet. The next blocker is implementing enough libultra/hardware replacement coverage and overlay mapping to safely dispatch deeper generated functions or `recomp_entrypoint`.
+It does **not** boot the game yet. The next blocker is expanding replacement coverage and overlay mapping enough to safely dispatch deeper generated functions or `recomp_entrypoint`.
 
