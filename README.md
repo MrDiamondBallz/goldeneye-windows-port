@@ -1,50 +1,126 @@
-# GoldenEye / N64 Native Windows Port
+# GoldenEye / N64 Native Port Research
 
-Public project repo for building real native Windows `.exe` ports from legally usable N64 ROM inputs, starting with GoldenEye 007.
+Experimental native-port research for running N64 games as real host executables, starting with **GoldenEye 007 (USA)**.
 
-## Scope
+This is **not** an emulator frontend and it does **not** distribute game files. The current track is a ROM/decompilation-assisted static-recompilation pipeline: user-owned N64 inputs → N64Recomp-generated C/C++ → a native runtime harness → eventually a proper desktop port.
 
-- Native Windows executable, not an emulator frontend.
-- Input starts from original/user-owned N64 ROMs where possible.
-- Controller support and settings UI.
-- Online multiplayer with custom netcode when the original game has no LAN/System Link protocol.
-- Public-domain / explicitly redistributable ROM fixtures may be committed under `test-roms/public-domain/` with source/license notes; commercial copyrighted game files, extracted assets, generated game-derived code, and binary game artifacts stay out of git.
+## Status
 
-## Current assignment
+| Area | Current state |
+| --- | --- |
+| N64Recomp codegen | GoldenEye USA codegen completes locally: `14380` functions, 18 generated files. |
+| Generated code | Compiles and links into a Linux x86-64 host executable. Generated output stays ignored/local-only. |
+| Runtime memory | Sparse 4 GiB+ host address space mirrors N64Recomp low-address aliasing for `0x700...`, `0x7F...`, and KSEG0 access patterns. |
+| Boot path | Guarded execution reaches `recomp_entrypoint -> boot bridge -> generated init -> generated mainproc`. |
+| Runtime primitives | First-pass ROM DMA, message queues, cooperative thread records, VI framebuffer bookkeeping, timing helpers, and guarded probes are implemented. |
+| Current blocker | Generated `mainproc` dispatch reaches the debug `debFind` / `pause_self` path and times out under the guarded child-process probe. |
 
-The project direction was clarified that the target is **not** the XBLA/ReXGlue shortcut as the main path. The real goal is:
+Latest verified normal probe:
 
-> Take any OG N64 ROM and make it a proper native Windows port. Custom netcode is fine.
+```text
+controlled_probe_result=OK boot_primitives_enabled safe_generated_dispatch_enabled
+next_runtime_blocker=main-thread dispatch reaches debFind/pause_self debug path after local ELF csegment restore
+```
 
-So this repo now tracks the N64 ROM → N64Recomp/native-runtime route as the canonical project direction.
-
-See:
-
-- [`docs/N64_ROM_NATIVE_PORT_ASSIGNMENT.md`](docs/N64_ROM_NATIVE_PORT_ASSIGNMENT.md)
-- [`docs/GOLDENEYE_PC_PORT_PLAN.md`](docs/GOLDENEYE_PC_PORT_PLAN.md)
+The game does **not** boot yet. The next milestone is to turn the debug `pause_self` path into a structured runtime blocker or seed the missing debug/assertion state so the main-thread probe can continue into scheduler/video/audio initialization.
 
 ## Legal boundary
 
-This repo may contain public-domain or explicitly redistributable ROM fixtures under `test-roms/public-domain/` when source/license notes are included. It must not contain commercial copyrighted ROMs, XEX files, extracted game assets, generated recompiled code from copyrighted binaries, save dumps, textures, audio, proprietary SDK material, bundled game executables, or generated copyrighted artifacts.
+This repository is code and documentation only.
 
-Required user-owned files are placed locally only under ignored paths such as `assets/`, `generated/`, or external working directories.
+It must not contain:
 
-## Local verified state
+- commercial ROMs, ISOs, XEX files, or other copyrighted game binaries;
+- extracted commercial assets, textures, audio, saves, or proprietary SDK material;
+- generated game-derived code or generated native binaries;
+- private credentials or machine-local artifacts.
 
-- User-supplied GoldenEye USA `.z64` verified by SHA1.
-- `n64decomp/007` matching US ROM output exists locally.
-- `N64Recomp` CLI tools build successfully locally.
-- GoldenEye US N64Recomp codegen now completes with the tracked rodata jump-table patch and current config.
-- The generated code pass reports `14380` functions and emits 18 generated files locally under ignored `ports/goldeneye/generated/us_recomp/`.
-- Native host spike now compiles/links generated GoldenEye code into a Linux x86-64 executable with a stub runtime.
-- Boot harness now reserves a sparse 4 GiB+ host address space so generated `MEM_*` low-address aliases match N64Recomp's unsigned wraparound behavior.
-- Runtime preloads the compressed cdata block into `_csegmentSegmentStart`, maps GoldenEye's `0x700...` / `0x7F...` sections, and bridges the original TLB-only `boot` shim directly into generated `init`.
-- First boot-grade runtime primitives are enabled: ROM DMA copy, message queues, cooperative thread records, VI framebuffer bookkeeping, and guarded entrypoint probing.
-- Latest verified native spike output: `controlled_probe_result=OK boot_primitives_enabled safe_generated_dispatch_enabled`.
-- Guarded `GOLDENEYE_TRY_ENTRYPOINT=1` probe now gets through `recomp_entrypoint -> boot bridge -> generated init`, reaches the intentional `initTLBPrepareContext` replacement seam, creates the main thread record, and exits cleanly.
-- `N64ModernRuntime` and `RT64` are cloned for native runtime work.
-- RecompFrontend needs a proper consuming app/CMake scaffold before it can be built standalone.
+Public-domain or explicitly redistributable ROM fixtures may be added only under `test-roms/public-domain/` with source and license notes. Commercial files must remain local and ignored.
 
-## Immediate next milestone
+## Repository layout
 
-Implement cooperative generated thread dispatch for the recorded main thread, then replace scheduler/video/audio stubs as the guarded probe reaches each new blocker.
+```text
+assets/                         Local-only asset placeholder docs
+patches/n64recomp/              N64Recomp patches required by the spike
+ports/goldeneye/app/            Native host harness / executable entrypoint
+ports/goldeneye/config/         N64Recomp config for GoldenEye USA
+ports/goldeneye/runtime/        Minimal host runtime and libultra replacements
+scripts/                        Codegen, build, analysis, and smoke-test helpers
+docs/                           Assignment notes and longer-form technical plan
+test-roms/                      Public-domain fixture policy
+```
+
+Ignored/generated paths include:
+
+```text
+ports/goldeneye/generated/
+ports/goldeneye/build-native-spike/
+assets/
+*.z64 / *.n64 / *.v64 / *.rom / *.iso / *.xex
+```
+
+## Local prerequisites
+
+The current spike expects local, legally obtained inputs and toolchains:
+
+- GoldenEye 007 USA ROM, supplied by the user and kept outside git.
+- Matching `n64decomp/007` build output, including `ge007.u.elf`.
+- N64Recomp built locally.
+- A Linux C/C++ build environment with CMake and GNU toolchain.
+
+Useful environment overrides:
+
+```bash
+export GE007_ROM=/path/to/baserom.u.z64
+export GE007_ELF=/path/to/ge007.u.elf
+export N64RECOMP_DIR=/path/to/N64Recomp
+```
+
+## Build and verify
+
+From the repository root:
+
+```bash
+scripts/build_goldeneye_native_spike.sh
+```
+
+That script:
+
+1. applies the tracked N64Recomp patch if needed;
+2. regenerates GoldenEye recompilation output locally;
+3. configures the native harness with CMake;
+4. builds `goldeneye_native_spike`;
+5. runs the safe normal probe.
+
+Optional guarded boot/main-thread probe:
+
+```bash
+GOLDENEYE_TRY_ENTRYPOINT=1 ports/goldeneye/build-native-spike/goldeneye_native_spike
+```
+
+The guarded probe forks a child process, installs signal diagnostics, and uses an alarm so deeper generated-code execution cannot make the normal verification path unsafe.
+
+## Current technical notes
+
+- The original GoldenEye `boot` function mainly installs a low-address TLB mapping and jumps to `init`. The host runtime already supplies the aliasing, so the native bridge calls generated `init` directly.
+- The generated inflate/TLB path is not complete yet. The guarded child restores the local decomp ELF `.csegment` at the `initTLBPrepareContext` seam so generated main-thread code sees resolved game data while this layer is under construction.
+- `osCreateThread` / `osStartThread` currently record cooperative thread metadata. The guarded probe dispatches the recorded main thread (`id=3`, `mainproc`) once.
+- `pause_self`, scheduler, video, audio, input, and controller behavior are still skeletal runtime replacements.
+
+## Documentation
+
+- [`docs/N64_ROM_NATIVE_PORT_ASSIGNMENT.md`](docs/N64_ROM_NATIVE_PORT_ASSIGNMENT.md) — detailed running log, verified outputs, and next blockers.
+- [`docs/GOLDENEYE_PC_PORT_PLAN.md`](docs/GOLDENEYE_PC_PORT_PLAN.md) — broader native-port direction.
+
+## Contributing
+
+This project is early-stage research. Keep changes small, verified, and legally clean.
+
+Before opening or merging changes:
+
+```bash
+git status --short --ignored
+scripts/build_goldeneye_native_spike.sh
+```
+
+Also verify that no ROMs, generated game output, binaries, credentials, or machine-local paths are staged.

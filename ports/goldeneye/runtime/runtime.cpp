@@ -32,6 +32,8 @@ constexpr LocalSectionInfo kSections[] = {
 constexpr uint32_t kCdataRomStart = 0x00021990u;
 constexpr uint32_t kInflateRomEnd = 0x00034B30u;
 constexpr uint32_t kCsegmentRamStart = 0x80020D90u;
+constexpr uint32_t kCsegmentElfFileOffset = 0x00CA0D90u;
+constexpr uint32_t kCsegmentElfFileSize = 0x0003C550u;
 
 constexpr std::size_t kNumSections = 29;
 
@@ -82,6 +84,33 @@ bool load_rom_file(const char* rom_path) {
         return false;
     }
     g_diag.rom_bytes = g_rom_bytes.size();
+    return true;
+}
+
+const char* default_elf_path() {
+    if (const char* from_env = std::getenv("GE007_ELF")) {
+        return from_env;
+    }
+    return "/root/projects/007/build/u/ge007.u.elf";
+}
+
+bool copy_file_range_to_vaddr(uint8_t* rdram, const char* path, uint32_t file_offset, uint32_t vaddr, std::size_t size) {
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file) {
+        return false;
+    }
+    const std::streamoff file_size = file.tellg();
+    if (file_size < 0 || static_cast<std::uint64_t>(file_offset) + size > static_cast<std::uint64_t>(file_size)) {
+        return false;
+    }
+    uint8_t* dest = nullptr;
+    if (!goldeneye_runtime_translate(rdram, vaddr, size, &dest)) {
+        return false;
+    }
+    file.seekg(static_cast<std::streamoff>(file_offset), std::ios::beg);
+    if (size != 0 && !file.read(reinterpret_cast<char*>(dest), static_cast<std::streamsize>(size))) {
+        return false;
+    }
     return true;
 }
 
@@ -161,13 +190,17 @@ std::size_t goldeneye_runtime_rom_size() {
     return g_rom_bytes.size();
 }
 
+bool goldeneye_runtime_preload_csegment_from_elf(uint8_t* rdram) {
+    return copy_file_range_to_vaddr(rdram, default_elf_path(), kCsegmentElfFileOffset, kCsegmentRamStart, kCsegmentElfFileSize);
+}
+
 GoldenEyeRuntimeDiagnostics goldeneye_runtime_get_diagnostics() {
     return g_diag;
 }
 
 void goldeneye_runtime_print_diagnostics() {
     const GoldenEyeRuntimeDiagnostics diag = goldeneye_runtime_get_diagnostics();
-    std::printf("runtime_primitives: rom_bytes=%zu dma_copies=%zu dma_bytes=%zu queues_created=%zu messages_sent=%zu messages_received=%zu threads_created=%zu threads_started=%zu\n",
+    std::printf("runtime_primitives: rom_bytes=%zu dma_copies=%zu dma_bytes=%zu queues_created=%zu messages_sent=%zu messages_received=%zu threads_created=%zu threads_started=%zu threads_dispatched=%zu\n",
         diag.rom_bytes,
         diag.dma_copies,
         diag.dma_bytes,
@@ -175,7 +208,8 @@ void goldeneye_runtime_print_diagnostics() {
         diag.messages_sent,
         diag.messages_received,
         diag.threads_created,
-        diag.threads_started);
+        diag.threads_started,
+        diag.threads_dispatched);
 }
 
 void goldeneye_runtime_record_queue_created() { g_diag.queues_created++; }
@@ -183,6 +217,7 @@ void goldeneye_runtime_record_message_sent() { g_diag.messages_sent++; }
 void goldeneye_runtime_record_message_received() { g_diag.messages_received++; }
 void goldeneye_runtime_record_thread_created() { g_diag.threads_created++; }
 void goldeneye_runtime_record_thread_started() { g_diag.threads_started++; }
+void goldeneye_runtime_record_thread_dispatched() { g_diag.threads_dispatched++; }
 
 bool goldeneye_has_function_metadata(uint32_t vram) {
     switch (vram) {
@@ -190,6 +225,8 @@ bool goldeneye_has_function_metadata(uint32_t vram) {
         case 0x80000450u: // boot replacement seam
         case 0x70000510u: // init
         case 0x7020141Cu: // decompress_entry
+        case 0x7000089Cu: // mainproc
+        case 0x70000718u: // idleproc
         case 0x700004BCu: // get_csegmentSegmentStart
         case 0x7F06C46Cu: // return_null
             return true;
@@ -208,6 +245,10 @@ recomp_func_t* goldeneye_lookup_function(uint32_t vram) {
             return init;
         case 0x7020141Cu:
             return decompress_entry;
+        case 0x7000089Cu:
+            return mainproc;
+        case 0x70000718u:
+            return idleproc;
         case 0x700004BCu:
             return get_csegmentSegmentStart;
         case 0x7F06C46Cu:
@@ -286,12 +327,13 @@ bool goldeneye_runtime_init(uint8_t* rdram, std::size_t rdram_size, const char* 
 }
 
 void goldeneye_runtime_print_state(const GoldenEyeRuntimeState& state) {
-    std::printf("sections: copied=%zu skipped=%zu copied_bytes=%zu low_mapped=%zu cdata_preloaded=%zu\n",
+    std::printf("sections: copied=%zu skipped=%zu copied_bytes=%zu low_mapped=%zu cdata_preloaded=%zu csegment_preloaded=%zu\n",
         state.copied_sections,
         state.skipped_sections,
         state.copied_bytes,
         state.mapped_low_sections,
-        state.preloaded_cdata_bytes);
+        state.preloaded_cdata_bytes,
+        state.preloaded_csegment_bytes);
 
     for (const GoldenEyeSectionLoad& section : state.sections) {
         std::printf("  section[%zu] rom=0x%08X ram=0x%08X size=0x%08X %s - %s\n",

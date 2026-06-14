@@ -1,7 +1,7 @@
 #include <cstdio>
 #include <cstdint>
 
-#include "recomp.h"
+#include "runtime.h"
 #include "funcs.h"
 
 extern "C" {
@@ -32,6 +32,12 @@ void resolve_TLBaddress_for_InvalidHit(uint8_t* rdram, recomp_context* ctx) {
 
 void initTLBPrepareContext(uint8_t* rdram, recomp_context* ctx) {
     replaced_runtime_stub("initTLBPrepareContext", rdram, ctx);
+    // Keep the boot path moving while the generated inflate/TLB setup is still
+    // skeletal by restoring the local decomp ELF's resolved csegment after init's
+    // decompression step. The ELF is local-only and never committed.
+    if (!goldeneye_runtime_preload_csegment_from_elf(rdram)) {
+        std::fprintf(stderr, "runtime replacement warning: failed to restore local ELF csegment\n");
+    }
 }
 
 void eqpower(uint8_t* rdram, recomp_context* ctx) {

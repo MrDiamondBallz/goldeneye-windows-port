@@ -30,6 +30,10 @@ const char* default_rom_path() {
 
 uint8_t* g_signal_rdram = nullptr;
 
+uint32_t read_u32(uint8_t* rdram, uint32_t vaddr) {
+    return static_cast<uint32_t>(MEM_W(0, S32(vaddr)));
+}
+
 bool entrypoint_probe_requested() {
     const char* value = std::getenv("GOLDENEYE_TRY_ENTRYPOINT");
     return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
@@ -86,6 +90,7 @@ void install_entrypoint_signal_handlers() {
     sigaction(SIGBUS, &action, nullptr);
     sigaction(SIGILL, &action, nullptr);
     sigaction(SIGABRT, &action, nullptr);
+    sigaction(SIGALRM, &action, nullptr);
 }
 
 void maybe_run_guarded_entrypoint(uint8_t* rdram) {
@@ -100,6 +105,7 @@ void maybe_run_guarded_entrypoint(uint8_t* rdram) {
         return;
     }
 
+    std::fflush(stdout);
     const pid_t child = fork();
     if (child < 0) {
         std::printf("entrypoint_probe=blocked reason=fork_failed errno=%d\n", errno);
@@ -116,6 +122,16 @@ void maybe_run_guarded_entrypoint(uint8_t* rdram) {
         std::printf("entrypoint_child=returned r2=0x%016llX sp=0x%016llX\n",
             static_cast<unsigned long long>(ctx.r2),
             static_cast<unsigned long long>(ctx.r29));
+        std::printf("post_init_probe g_Textures[0]=0x%08X g_Textures[1]=0x%08X\n",
+            read_u32(rdram, 0x80049300u),
+            read_u32(rdram, 0x80049308u));
+        goldeneye_runtime_print_thread_records();
+        std::fflush(stdout);
+        const std::size_t dispatched = goldeneye_runtime_dispatch_started_threads(rdram, 3, 1);
+        std::printf("entrypoint_child_threads_dispatched=%zu\n", dispatched);
+        goldeneye_runtime_print_thread_records();
+        goldeneye_runtime_print_diagnostics();
+        std::fflush(stdout);
         _exit(0);
     }
 
@@ -180,6 +196,8 @@ int main() {
         {"boot", 0x80000450u, false},
         {"init", 0x70000510u, false},
         {"decompress_entry", 0x7020141Cu, false},
+        {"mainproc", 0x7000089Cu, false},
+        {"idleproc", 0x70000718u, false},
         {"get_csegmentSegmentStart", 0x700004BCu, true},
         {"return_null", 0x7F06C46Cu, true},
     };
@@ -246,6 +264,6 @@ int main() {
     maybe_run_guarded_entrypoint(rdram);
 
     std::printf("controlled_probe_result=OK boot_primitives_enabled safe_generated_dispatch_enabled\n");
-    std::printf("next_runtime_blocker=implement cooperative generated main-thread dispatch and replace scheduler/video/audio stubs\n");
+    std::printf("next_runtime_blocker=main-thread dispatch reaches debFind/pause_self debug path after local ELF csegment restore\n");
     return 0;
 }

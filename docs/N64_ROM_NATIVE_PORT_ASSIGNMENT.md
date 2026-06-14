@@ -260,42 +260,58 @@ Verified output:
 GoldenEye native boot harness spike
 rom_name=ge007.u.z64 entry=0xFFFFFFFF80000400 generated_lookup=callable
 host_address_space=4303355904 logical_rdram=8388608 low_alias_span=268435456 runtime=boot-primitives
-sections: copied=4 skipped=1 copied_bytes=1068160 low_mapped=3 cdata_preloaded=78240
+sections: copied=4 skipped=1 copied_bytes=1068160 low_mapped=3 cdata_preloaded=78240 csegment_preloaded=0
 metadata recomp_entrypoint 0x80000400 -> FOUND dispatch=DEFERRED
 metadata boot 0x80000450 -> FOUND dispatch=ENABLED
 metadata init 0x70000510 -> FOUND dispatch=ENABLED
 metadata decompress_entry 0x7020141C -> FOUND dispatch=ENABLED
+metadata mainproc 0x7000089C -> FOUND dispatch=ENABLED
+metadata idleproc 0x70000718 -> FOUND dispatch=ENABLED
 metadata get_csegmentSegmentStart 0x700004BC -> FOUND dispatch=ENABLED
 probe get_csegmentSegmentStart -> OK r2=0xFFFFFFFF80020D90 sp=0xFFFFFFFF807FF000
 metadata return_null 0x7F06C46C -> FOUND dispatch=ENABLED
 probe return_null -> OK r2=0x0000000000000000 sp=0xFFFFFFFF807FF000
-runtime_primitives: rom_bytes=12582912 dma_copies=6 dma_bytes=1146464 queues_created=1 messages_sent=2 messages_received=1 threads_created=1 threads_started=1
+runtime_primitives: rom_bytes=12582912 dma_copies=6 dma_bytes=1146464 queues_created=1 messages_sent=2 messages_received=1 threads_created=1 threads_started=1 threads_dispatched=0
 entrypoint_probe=skipped set GOLDENEYE_TRY_ENTRYPOINT=1 to attempt guarded child process
 controlled_probe_result=OK boot_primitives_enabled safe_generated_dispatch_enabled
 ```
 
-Guarded entrypoint probe:
+Guarded entrypoint/main-thread probe:
 
 ```text
 GOLDENEYE_TRY_ENTRYPOINT=1 ports/goldeneye/build-native-spike/goldeneye_native_spike
 runtime replacement stub called: initTLBPrepareContext
-entrypoint_probe=attempted child_exit=0
+pause_self stub
+pause_self stub
+pause_self stub
+pause_self stub
+pause_self stub
+pause_self stub
+entrypoint_child=returned r2=0x0000000000000000 sp=0xFFFFFFFF803AB410
+post_init_probe g_Textures[0]=0x54070000 g_Textures[1]=0x6A010000
+thread_records count=2
+  thread id=1 ptr=0x807FC000 entry=0x80000400 arg=0x00000000 stack=0x807FB000 priority=10 started=1 dispatched=0
+  thread id=3 ptr=0x8005D640 entry=0x7000089C arg=0x00000000 stack=0x803B3948 priority=10 started=1 dispatched=0
+thread_dispatch id=3 entry=0x7000089C stack=0x803B3948 priority=10 dispatch=ENABLED
+entrypoint_probe=attempted child_exit=142
+entrypoint_child_signal signal=14 fault_addr=(nil) ...
+addr2line: debFind at generated/us_recomp/funcs_10.c:22157
 ```
 
 The produced local binary is ignored and not committed:
 
 ```text
 ports/goldeneye/build-native-spike/goldeneye_native_spike
-SHA256 6d0276413bf08a54d9c21c7fdfd3597c9e8ef8a0d7dd9b2499aae6144ceebcc5
+SHA256 9910f0467bf3222069f2bd852f504d33b406db27d7118e51e4df0a73dba36514
 ```
 
 This now proves:
 
 1. generated GoldenEye translation units still compile and link into a native Linux x86-64 host executable;
 2. the harness reserves a sparse host address space that matches N64Recomp low-address aliasing and maps the direct `0x80000400` section plus low-address `0x700...` / `0x7F...` sections into host memory;
-3. the compressed cdata block is preloaded at `_csegmentSegmentStart`, allowing generated `init` to copy/decompress through the real boot path;
+3. the compressed cdata block is preloaded at `_csegmentSegmentStart`, allowing generated `init` to execute; the guarded child restores the local-only decomp ELF `.csegment` at the `initTLBPrepareContext` seam while generated inflate/TLB behavior remains incomplete;
 4. first-pass ROM DMA, message queue, cooperative thread, VI framebuffer, and timing primitives execute in the host runtime;
-5. guarded `recomp_entrypoint` dispatch is isolated in a child process and now progresses through `recomp_entrypoint -> boot bridge -> generated init`, reaches the intentional `initTLBPrepareContext` replacement seam, creates the main thread record, and exits cleanly.
+5. guarded `recomp_entrypoint` dispatch is isolated in a child process and now progresses through `recomp_entrypoint -> boot bridge -> generated init -> generated mainproc`, dispatching recorded thread id `3` before timing out in the debug `debFind`/`pause_self` path.
 
-It does **not** boot the game yet. The next blocker is cooperative dispatch of the generated main thread and progressively replacing scheduler/video/audio/runtime stubs as that path advances.
+It does **not** boot the game yet. The next blocker is the debug `debFind` / `pause_self` path reached by generated `mainproc`; investigate the missing debug table/assert state or convert `pause_self` into a structured runtime blocker so the probe can advance further.
 

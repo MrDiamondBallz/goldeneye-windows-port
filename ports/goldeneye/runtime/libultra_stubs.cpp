@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "recomp.h"
+#include "funcs.h"
 #include "runtime.h"
 
 namespace {
@@ -23,6 +24,7 @@ struct ThreadRecord {
     uint32_t stack{};
     int32_t priority{};
     bool started{};
+    bool dispatched{};
 };
 
 std::vector<ThreadRecord> g_threads;
@@ -121,9 +123,70 @@ void generic_success(recomp_context* ctx) {
     set_result(ctx, kOsOk);
 }
 
+void init_thread_context(recomp_context* ctx, const ThreadRecord& record) {
+    *ctx = recomp_context{};
+    ctx->mips3_float_mode = 1;
+    ctx->r4 = sign32(record.arg);
+    ctx->r29 = sign32(record.stack);
+}
+
 #define GE_STUB(name) void name(uint8_t*, recomp_context* ctx) { generic_success(ctx); }
 
 } // namespace
+
+std::size_t goldeneye_runtime_dispatch_started_threads(uint8_t* rdram, int32_t only_thread_id, std::size_t max_dispatches) {
+    std::size_t dispatched = 0;
+    for (ThreadRecord& record : g_threads) {
+        if (dispatched >= max_dispatches) {
+            break;
+        }
+        if (!record.started || record.dispatched) {
+            continue;
+        }
+        if (only_thread_id >= 0 && record.id != only_thread_id) {
+            continue;
+        }
+
+        recomp_func_t* entry = goldeneye_lookup_function(record.entry);
+        std::printf("thread_dispatch id=%d entry=0x%08X stack=0x%08X priority=%d dispatch=%s\n",
+            record.id,
+            record.entry,
+            record.stack,
+            record.priority,
+            entry != nullptr ? "ENABLED" : "MISSING");
+        std::fflush(stdout);
+        if (entry == nullptr) {
+            continue;
+        }
+
+        record.dispatched = true;
+        goldeneye_runtime_record_thread_dispatched();
+        recomp_context thread_ctx{};
+        init_thread_context(&thread_ctx, record);
+        entry(rdram, &thread_ctx);
+        std::printf("thread_dispatch_return id=%d r2=0x%016llX sp=0x%016llX\n",
+            record.id,
+            static_cast<unsigned long long>(thread_ctx.r2),
+            static_cast<unsigned long long>(thread_ctx.r29));
+        dispatched++;
+    }
+    return dispatched;
+}
+
+void goldeneye_runtime_print_thread_records() {
+    std::printf("thread_records count=%zu\n", g_threads.size());
+    for (const ThreadRecord& record : g_threads) {
+        std::printf("  thread id=%d ptr=0x%08X entry=0x%08X arg=0x%08X stack=0x%08X priority=%d started=%d dispatched=%d\n",
+            record.id,
+            record.thread,
+            record.entry,
+            record.arg,
+            record.stack,
+            record.priority,
+            record.started ? 1 : 0,
+            record.dispatched ? 1 : 0);
+    }
+}
 
 extern "C" {
 
