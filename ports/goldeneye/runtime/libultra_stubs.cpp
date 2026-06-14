@@ -15,6 +15,8 @@ constexpr int32_t kOsMesgNoBlock = 0;
 constexpr int32_t kOsMesgBlock = 1;
 constexpr int32_t kOsError = -1;
 constexpr int32_t kOsOk = 0;
+constexpr uint32_t kSyntheticRetraceMsg = 0x807E0000u;
+constexpr int16_t kOsScRetraceMsg = 1;
 
 struct ThreadRecord {
     uint32_t thread{};
@@ -74,6 +76,13 @@ void write_word(uint8_t* rdram, uint32_t addr, int32_t value) {
         return;
     }
     MEM_W(0, sign32(addr)) = value;
+}
+
+void write_half(uint8_t* rdram, uint32_t addr, int16_t value) {
+    if (!can_access(rdram, addr, sizeof(int16_t))) {
+        return;
+    }
+    MEM_H(0, sign32(addr)) = value;
 }
 
 uint32_t stack_arg(uint8_t* rdram, recomp_context* ctx, uint32_t offset) {
@@ -292,7 +301,14 @@ void osRecvMesg_recomp(uint8_t* rdram, recomp_context* ctx) {
     const uint32_t msg_buf = static_cast<uint32_t>(read_word(rdram, queue + 0x14));
 
     if (valid <= 0 || count <= 0 || msg_buf == 0) {
-        set_result(ctx, flags == kOsMesgBlock ? kOsOk : kOsError);
+        if (flags == kOsMesgBlock && out_msg != 0) {
+            write_half(rdram, kSyntheticRetraceMsg, kOsScRetraceMsg);
+            write_word(rdram, out_msg, static_cast<int32_t>(kSyntheticRetraceMsg));
+            goldeneye_runtime_record_message_received();
+            set_result(ctx, kOsOk);
+            return;
+        }
+        set_result(ctx, kOsError);
         if (out_msg != 0) {
             write_word(rdram, out_msg, 0);
         }

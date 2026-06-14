@@ -13,16 +13,16 @@ This is **not** an emulator frontend, and the repo does **not** ship game files.
 | Runtime memory | Sparse 4 GiB+ host address space mirrors N64Recomp low-address aliasing for `0x700...`, `0x7F...`, and KSEG0 access patterns. |
 | Boot path | Guarded execution reaches `recomp_entrypoint -> boot bridge -> generated init -> generated mainproc`. |
 | Runtime primitives | First-pass ROM DMA, message queues, cooperative thread records, VI framebuffer bookkeeping, timing helpers, and guarded probes are implemented. |
-| Current blocker | Generated `mainproc` dispatch now gets past the debug registry and early audio/asset setup, then reaches the first `waitForNextFrame` frame-pump boundary under the guarded child-process probe. |
+| Current blocker | Guarded `mainproc` now advances through two host-simulated frame ticks, then reaches `guPerspectiveF` with missing view/camera state in the generated render path. |
 
 Latest verified normal probe:
 
 ```text
 controlled_probe_result=OK boot_primitives_enabled safe_generated_dispatch_enabled
-next_runtime_blocker=main-thread dispatch reaches waitForNextFrame frame pump; scheduler/video/audio host runtime still skeletal
+next_runtime_blocker=guarded frame pump advances two ticks, then generated render path reaches guPerspectiveF with missing view/camera state
 ```
 
-The game does **not** boot yet. The next milestone is a real host frame pump: scheduler/video timing, VI presentation, input/controller polling, and audio/asset streaming need native implementations instead of probe-only placeholders.
+The game does **not** boot yet. The next milestone is valid view/camera/player bootstrap for the render path, plus real scheduler/video presentation behind the current probe-only frame tick.
 
 ## Legal boundary
 
@@ -93,18 +93,19 @@ That script:
 Optional guarded boot/main-thread probe:
 
 ```bash
-GOLDENEYE_TRY_ENTRYPOINT=1 ports/goldeneye/build-native-spike/goldeneye_native_spike
+GOLDENEYE_TRY_ENTRYPOINT=1 GOLDENEYE_ENTRYPOINT_TIMEOUT_SEC=20 GOLDENEYE_FRAME_TICK_LIMIT=3 ports/goldeneye/build-native-spike/goldeneye_native_spike
 ```
 
-The guarded probe forks a child process, installs signal diagnostics, and uses an alarm so deeper generated-code execution cannot make the normal verification path unsafe.
+The guarded probe forks a child process, installs signal diagnostics, and uses an alarm so deeper generated-code execution cannot make the normal verification path unsafe. `GOLDENEYE_FRAME_TICK_LIMIT` can cap successful host-simulated frame ticks during runtime experiments.
 
 ## Current technical notes
 
 - The original GoldenEye `boot` function mainly installs a low-address TLB mapping and jumps to `init`. The host runtime already supplies the aliasing, so the native bridge calls generated `init` directly.
 - The generated inflate/TLB path is not complete yet. The guarded child restores the local decomp ELF `.csegment` at the `initTLBPrepareContext` seam so generated main-thread code sees resolved game data while this layer is under construction.
 - `osCreateThread` / `osStartThread` currently record cooperative thread metadata. The guarded probe dispatches the recorded main thread (`id=3`, `mainproc`) once.
+- Scheduler message reads can synthesize retrace messages for blocking waits, and `waitForNextFrame` is now a deterministic host frame tick that updates the original frame-counter globals.
 - Debug registry, early audio, memory-pool resizing, and generic compressed-asset expansion are probe-only placeholders so the guarded path can advance to the next major runtime seam.
-- Scheduler, video, audio, input, and controller behavior are still skeletal runtime replacements; the current guarded boundary is `waitForNextFrame`.
+- Scheduler, video, audio, input, and controller behavior are still skeletal runtime replacements; the current guarded boundary is generated rendering setup at `guPerspectiveF`.
 
 ## Documentation
 

@@ -275,28 +275,30 @@ probe return_null -> OK r2=0x0000000000000000 sp=0xFFFFFFFF807FF000
 runtime_primitives: rom_bytes=12582912 dma_copies=6 dma_bytes=1146464 queues_created=1 messages_sent=2 messages_received=1 threads_created=1 threads_started=1 threads_dispatched=0
 entrypoint_probe=skipped set GOLDENEYE_TRY_ENTRYPOINT=1 to attempt guarded child process
 controlled_probe_result=OK boot_primitives_enabled safe_generated_dispatch_enabled
-next_runtime_blocker=main-thread dispatch reaches waitForNextFrame frame pump; scheduler/video/audio host runtime still skeletal
+next_runtime_blocker=guarded frame pump advances two ticks, then generated render path reaches guPerspectiveF with missing view/camera state
 ```
 
 Guarded entrypoint/main-thread probe:
 
 ```text
-GOLDENEYE_TRY_ENTRYPOINT=1 GOLDENEYE_ENTRYPOINT_TIMEOUT_SEC=10 ports/goldeneye/build-native-spike/goldeneye_native_spike
+GOLDENEYE_TRY_ENTRYPOINT=1 GOLDENEYE_ENTRYPOINT_TIMEOUT_SEC=20 GOLDENEYE_FRAME_TICK_LIMIT=3 ports/goldeneye/build-native-spike/goldeneye_native_spike
 runtime replacement stub called: initTLBPrepareContext
 entrypoint_child=returned r2=0x0000000000000000 sp=0xFFFFFFFF803AB410
 post_init_probe g_Textures[0]=0x54070000 g_Textures[1]=0x6A010000
 thread_records count=2
 thread_dispatch id=3 entry=0x7000089C stack=0x803B3948 priority=10 dispatch=ENABLED
-entrypoint_probe=attempted child_exit=142
-entrypoint_child_signal signal=14 fault_addr=(nil) ...
-addr2line: waitForNextFrame at generated/us_recomp/funcs_5.c:2543
+host_frame_tick count=1 delta=1 currentFrameCounter=1 os_count=0x000BD6C3
+host_frame_tick count=2 delta=1 currentFrameCounter=2 os_count=0x0017AD86
+entrypoint_probe=attempted child_exit=139
+entrypoint_child_signal signal=11 fault_addr=0x40 ...
+addr2line: guPerspectiveF at generated/us_recomp/funcs_7.c:9425
 ```
 
 The produced local binary is ignored and not committed:
 
 ```text
 ports/goldeneye/build-native-spike/goldeneye_native_spike
-SHA256 285b5680b09be4e66022f593712d76dd844bd974896d4dc5f7eae14defc65cbd
+SHA256 f6aedf0d76c931f7c9797be8bd4c52c30496adb3c52f4082faf136c98b5aee1f
 ```
 
 This now proves:
@@ -305,7 +307,7 @@ This now proves:
 2. the harness reserves a sparse host address space that matches N64Recomp low-address aliasing and maps the direct `0x80000400` section plus low-address `0x700...` / `0x7F...` sections into host memory;
 3. the compressed cdata block is preloaded at `_csegmentSegmentStart`, allowing generated `init` to execute; the guarded child restores the local-only decomp ELF `.csegment` at the `initTLBPrepareContext` seam while generated inflate/TLB behavior remains incomplete;
 4. first-pass ROM DMA, message queue, cooperative thread, VI framebuffer, and timing primitives execute in the host runtime;
-5. guarded `recomp_entrypoint` dispatch is isolated in a child process and now progresses through `recomp_entrypoint -> boot bridge -> generated init -> generated mainproc`, dispatching recorded thread id `3` past the debug registry and early audio/asset placeholders before timing out at the first `waitForNextFrame` frame-pump boundary.
+5. guarded `recomp_entrypoint` dispatch is isolated in a child process and now progresses through `recomp_entrypoint -> boot bridge -> generated init -> generated mainproc`, dispatching recorded thread id `3` past the debug registry and early audio/asset placeholders, through two deterministic host frame ticks, and into generated rendering setup before faulting in `guPerspectiveF` due to missing view/camera state.
 
-It does **not** boot the game yet. The next blocker is a real host frame pump: scheduler/video timing, VI presentation, controller/input polling, and audio/asset streaming need native implementations instead of probe-only placeholders.
+It does **not** boot the game yet. The next blocker is valid view/camera/player bootstrap for the render path, plus real scheduler/video presentation behind the current probe-only frame tick.
 

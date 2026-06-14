@@ -278,6 +278,6 @@ int main() {
     maybe_run_guarded_entrypoint(rdram);
 
     std::printf("controlled_probe_result=OK boot_primitives_enabled safe_generated_dispatch_enabled\n");
-    std::printf("next_runtime_blocker=main-thread dispatch reaches waitForNextFrame frame pump; scheduler/video/audio host runtime still skeletal\n");
+    std::printf("next_runtime_blocker=guarded frame pump advances two ticks, then generated render path reaches guPerspectiveF with missing view/camera state\n");
     return 0;
 }

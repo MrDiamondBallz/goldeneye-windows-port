@@ -43,6 +43,7 @@ void mempAddEntryOfSizeToBank(uint8_t* rdram, recomp_context* ctx);
 void musicSeqPlayerInit(uint8_t* rdram, recomp_context* ctx);
 void decompressdata(uint8_t* rdram, recomp_context* ctx);
 void alCSeqNew(uint8_t* rdram, recomp_context* ctx);
+void waitForNextFrame(uint8_t* rdram, recomp_context* ctx);
 void eqpower(uint8_t* rdram, recomp_context* ctx);
 
 #ifdef __cplusplus

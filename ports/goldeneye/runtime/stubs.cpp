@@ -1,4 +1,5 @@
 #include <cstdio>
+#include <cstdlib>
 #include <cstdint>
 #include <cstring>
 
@@ -15,9 +16,40 @@ static void replaced_runtime_stub(const char* name, uint8_t*, recomp_context* ct
 }
 
 uint32_t g_host_memp_cursor = 0x80100000u;
+uint32_t g_host_frame_ticks = 0;
+uint32_t g_host_frame_os_count = 0;
 
 uint32_t align16(uint32_t value) {
     return (value + 0xFu) & ~0xFu;
+}
+
+int32_t read_runtime_word(uint8_t* rdram, uint32_t addr) {
+    uint8_t* ptr = nullptr;
+    if (!goldeneye_runtime_translate(rdram, addr, sizeof(int32_t), &ptr)) {
+        return 0;
+    }
+    return MEM_W(0, S32(addr));
+}
+
+void write_runtime_word(uint8_t* rdram, uint32_t addr, int32_t value) {
+    uint8_t* ptr = nullptr;
+    if (!goldeneye_runtime_translate(rdram, addr, sizeof(int32_t), &ptr)) {
+        return;
+    }
+    MEM_W(0, S32(addr)) = value;
+}
+
+uint32_t frame_tick_limit() {
+    const char* value = std::getenv("GOLDENEYE_FRAME_TICK_LIMIT");
+    if (value == nullptr || value[0] == '\0') {
+        return 0;
+    }
+    char* end = nullptr;
+    const unsigned long parsed = std::strtoul(value, &end, 10);
+    if (end == value || parsed > 1000) {
+        return 0;
+    }
+    return static_cast<uint32_t>(parsed);
 }
 
 void sizepropdef(uint8_t* rdram, recomp_context* ctx) {
@@ -146,6 +178,68 @@ void decompressdata(uint8_t*, recomp_context* ctx) {
 void alCSeqNew(uint8_t*, recomp_context* ctx) {
     // Sequence construction currently depends on audio assets that are intentionally
     // skipped by the native spike. Treat it as a no-op until host audio exists.
+    if (ctx != nullptr) {
+        ctx->r2 = 0;
+    }
+}
+
+void waitForNextFrame(uint8_t* rdram, recomp_context* ctx) {
+    // Native probe frame pump for unk_0C0A70.c. The generated function busy-waits
+    // on osGetCount until enough N64 ticks have elapsed, then calls
+    // updateFrameCounters(). In the guarded host harness we advance that state
+    // deterministically instead of burning CPU until the alarm fires.
+    constexpr uint32_t kLastFrameCounter = 0x80048490u;
+    constexpr uint32_t kCurrentFrameCounter = 0x80048494u;
+    constexpr uint32_t kSpeedgraphFrames = 0x80048498u;
+    constexpr uint32_t kPreviousFrameCounter = 0x8004849Cu;
+    constexpr uint32_t kHalfFrameCounter = 0x800484A0u;
+    constexpr uint32_t kIsFrameCounterOdd = 0x800484A4u;
+    constexpr uint32_t kHalfMinusPreviousCounter = 0x800484A8u;
+    constexpr uint32_t kOsCountCopy0 = 0x800484ACu;
+    constexpr uint32_t kOsCountCopy1 = 0x800484B0u;
+    constexpr uint32_t kFrameDelay = 0x800484B4u;
+    constexpr uint32_t kNtSCFrameTicks = 775875u;
+
+    int32_t delta_frames = read_runtime_word(rdram, kFrameDelay);
+    if (delta_frames <= 0 || delta_frames > 10) {
+        delta_frames = 1;
+    }
+
+    const int32_t last_current = read_runtime_word(rdram, kCurrentFrameCounter);
+    const int32_t previous_half = read_runtime_word(rdram, kHalfFrameCounter);
+    const int32_t next_current = last_current + delta_frames;
+    const int32_t next_half = next_current / 2;
+
+    write_runtime_word(rdram, kOsCountCopy0, read_runtime_word(rdram, kOsCountCopy1));
+    g_host_frame_os_count += static_cast<uint32_t>(delta_frames) * kNtSCFrameTicks;
+    write_runtime_word(rdram, kOsCountCopy1, static_cast<int32_t>(g_host_frame_os_count));
+    write_runtime_word(rdram, kLastFrameCounter, last_current);
+    write_runtime_word(rdram, kCurrentFrameCounter, next_current);
+    write_runtime_word(rdram, kSpeedgraphFrames, delta_frames);
+    write_runtime_word(rdram, kPreviousFrameCounter, previous_half);
+    write_runtime_word(rdram, kHalfFrameCounter, next_half);
+    write_runtime_word(rdram, kIsFrameCounterOdd, next_current & 1);
+    write_runtime_word(rdram, kHalfMinusPreviousCounter, next_half - previous_half);
+    write_runtime_word(rdram, kFrameDelay, 1);
+
+    g_host_frame_ticks++;
+    std::printf("host_frame_tick count=%u delta=%d currentFrameCounter=%d os_count=0x%08X\n",
+        g_host_frame_ticks,
+        delta_frames,
+        next_current,
+        g_host_frame_os_count);
+    std::fflush(stdout);
+
+    const uint32_t limit = frame_tick_limit();
+    if (limit != 0 && g_host_frame_ticks >= limit) {
+        std::fprintf(stderr,
+            "host_frame_tick_limit reached count=%u currentFrameCounter=%d\n",
+            g_host_frame_ticks,
+            next_current);
+        std::fflush(stderr);
+        std::_Exit(150);
+    }
+
     if (ctx != nullptr) {
         ctx->r2 = 0;
     }
