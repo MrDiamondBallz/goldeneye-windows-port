@@ -118,6 +118,32 @@ bool resolve_segmented_address(uint32_t segmented, const std::array<uint32_t, kS
     return true;
 }
 
+bool resolve_runtime_resource_address(
+    uint8_t* rdram,
+    uint32_t raw_address,
+    const std::array<uint32_t, kSegmentCount>& segments,
+    uint32_t* out_vaddr,
+    bool* out_valid) {
+    if (out_vaddr == nullptr || out_valid == nullptr) {
+        return false;
+    }
+
+    uint32_t candidate = raw_address;
+    if (is_segmented_address(raw_address)) {
+        if (!resolve_segmented_address(raw_address, segments, &candidate)) {
+            *out_valid = false;
+            return false;
+        }
+    } else if (raw_address < 0x00800000u) {
+        candidate = 0x80000000u + raw_address;
+    }
+
+    uint8_t* ptr = nullptr;
+    *out_vaddr = candidate;
+    *out_valid = goldeneye_runtime_translate(rdram, candidate, 1, &ptr);
+    return true;
+}
+
 bool read_command(uint8_t* rdram, uint32_t command_addr, uint32_t* w0, uint32_t* w1) {
     return can_translate_u64_command(rdram, command_addr)
         && read_u32(rdram, command_addr, w0)
@@ -218,30 +244,44 @@ void classify_command(
     bool has_resolved_address = false;
     uint32_t resolved_address = 0;
 
+    const auto validate_address = [&](uint32_t raw_address) {
+        result.backend_address_refs++;
+        if (resolve_runtime_resource_address(rdram, raw_address, segments, &resolved_address, &has_resolved_address)
+            && has_resolved_address) {
+            result.backend_valid_refs++;
+        } else {
+            result.backend_invalid_refs++;
+        }
+    };
+
     switch (opcode) {
     case kGbiMatrix:
         result.matrix_commands++;
+        result.backend_geometry_packets++;
         preview_backend_packet = true;
+        validate_address(w1);
         break;
     case kGbiVertex:
         result.vertex_commands++;
+        result.backend_geometry_packets++;
         preview_backend_packet = true;
-        if (is_segmented_address(w1) && resolve_segmented_address(w1, segments, &resolved_address)) {
-            has_resolved_address = true;
-        }
+        validate_address(w1);
         break;
     case kGbiTexture:
         result.texture_commands++;
+        result.backend_state_packets++;
         preview_backend_packet = true;
         break;
     case kGbiTriangle1:
         result.triangle_commands++;
         result.presentation_packets++;
+        result.backend_geometry_packets++;
         preview_backend_packet = true;
         break;
     case kGbiSetGeometryMode:
     case kGbiClearGeometryMode:
         result.geometry_mode_commands++;
+        result.backend_state_packets++;
         preview_backend_packet = true;
         break;
     case 0xE6u: // RDPLoadSync
@@ -249,17 +289,20 @@ void classify_command(
     case 0xE8u: // RDPTileSync
     case 0xE9u: // RDPFullSync
         result.sync_commands++;
+        result.backend_sync_packets++;
         preview_backend_packet = true;
         break;
     case 0xEFu: // SetOtherMode
     case 0xB9u: // SetOtherMode_L in several GoldenEye display lists
     case 0xBAu: // SetOtherMode_H in several GoldenEye display lists
         result.othermode_commands++;
+        result.backend_state_packets++;
         preview_backend_packet = true;
         break;
     case 0xF2u: // SetTileSize
     case 0xF5u: // SetTile
         result.tile_setup_commands++;
+        result.backend_texture_packets++;
         preview_backend_packet = true;
         break;
     case 0xF0u: // LoadTLUT
@@ -267,54 +310,54 @@ void classify_command(
     case 0xF4u: // LoadTile
         result.texture_load_commands++;
         result.presentation_packets++;
+        result.backend_texture_packets++;
         preview_backend_packet = true;
         break;
     case 0xF6u: // FillRect
         result.fill_rect_commands++;
         result.presentation_packets++;
+        result.backend_target_packets++;
         preview_backend_packet = true;
         break;
     case 0xFCu: // SetCombine
         result.combine_mode_commands++;
+        result.backend_state_packets++;
         preview_backend_packet = true;
         break;
     case 0xFDu: // SetTextureImage
         result.texture_image_commands++;
+        result.backend_texture_packets++;
         preview_backend_packet = true;
         if (is_segmented_address(w1)) {
             result.texture_image_segmented_refs++;
-            uint32_t resolved_image = 0;
-            if (resolve_segmented_address(w1, segments, &resolved_image)) {
-                uint8_t* image_ptr = nullptr;
-                resolved_address = resolved_image;
-                has_resolved_address = goldeneye_runtime_translate(rdram, resolved_image, 1, &image_ptr);
-                if (has_resolved_address) {
-                    result.resolved_texture_image_refs++;
-                } else {
-                    result.unresolved_texture_image_refs++;
-                }
-                record_texture_image_preview(result, resolved_image);
-            } else {
-                result.unresolved_texture_image_refs++;
-                record_texture_image_preview(result, w1);
-            }
+        }
+        validate_address(w1);
+        if (has_resolved_address) {
+            result.resolved_texture_image_refs++;
+            record_texture_image_preview(result, resolved_address);
         } else {
-            record_texture_image_preview(result, w1);
+            result.unresolved_texture_image_refs++;
+            record_texture_image_preview(result, resolved_address != 0 ? resolved_address : w1);
         }
         break;
     case 0xFEu: // SetDepthImage / Z image
         result.depth_image_commands++;
+        result.backend_target_packets++;
         preview_backend_packet = true;
+        validate_address(w1);
         break;
     case 0xFFu: // SetColorImage
         result.color_image_commands++;
+        result.backend_target_packets++;
         preview_backend_packet = true;
+        validate_address(w1);
         break;
     default:
         break;
     }
 
     if (preview_backend_packet) {
+        result.backend_packets++;
         record_backend_packet_preview(result, opcode, w0, w1, resolved_address, has_resolved_address);
     }
 }
@@ -549,6 +592,18 @@ void goldeneye_renderer_print_task_result(const GoldenEyeRendererTaskResult& res
         result.fill_rect_commands,
         result.othermode_commands,
         result.presentation_packets);
+
+    std::printf(
+        "host_renderer_backend packets=%u geometry=%u state=%u texture=%u target=%u sync=%u address_refs=%u valid_refs=%u invalid_refs=%u\n",
+        result.backend_packets,
+        result.backend_geometry_packets,
+        result.backend_state_packets,
+        result.backend_texture_packets,
+        result.backend_target_packets,
+        result.backend_sync_packets,
+        result.backend_address_refs,
+        result.backend_valid_refs,
+        result.backend_invalid_refs);
 
     print_top_opcodes(result);
 

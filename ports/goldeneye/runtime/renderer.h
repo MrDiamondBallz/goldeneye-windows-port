@@ -47,6 +47,15 @@ struct GoldenEyeRendererTaskResult {
     uint32_t fill_rect_commands{};
     uint32_t othermode_commands{};
     uint32_t presentation_packets{};
+    uint32_t backend_packets{};
+    uint32_t backend_state_packets{};
+    uint32_t backend_geometry_packets{};
+    uint32_t backend_texture_packets{};
+    uint32_t backend_target_packets{};
+    uint32_t backend_sync_packets{};
+    uint32_t backend_address_refs{};
+    uint32_t backend_valid_refs{};
+    uint32_t backend_invalid_refs{};
     std::array<uint32_t, 256> opcode_histogram{};
     bool command_limit_hit{};
     bool list_limit_hit{};
