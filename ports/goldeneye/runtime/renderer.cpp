@@ -10,9 +10,17 @@
 
 namespace {
 
+constexpr uint32_t kGbiMatrix = 0x01u;
+constexpr uint32_t kGbiVertex = 0x04u;
 constexpr uint32_t kGbiBranchDl = 0x06u;
-constexpr uint32_t kGbiEndDisplayList = 0xB8u;
+constexpr uint32_t kGbiTriangle1 = 0xBFu;
+constexpr uint32_t kGbiCullDl = 0xBEu;
+constexpr uint32_t kGbiPopMatrix = 0xBDu;
 constexpr uint32_t kGbiMoveWord = 0xBCu;
+constexpr uint32_t kGbiTexture = 0xBBu;
+constexpr uint32_t kGbiSetGeometryMode = 0xB7u;
+constexpr uint32_t kGbiClearGeometryMode = 0xB6u;
+constexpr uint32_t kGbiEndDisplayList = 0xB8u;
 constexpr uint32_t kGbiMoveWordSegment = 0x06u;
 constexpr uint32_t kMinimumCommandBytes = 8u;
 constexpr std::size_t kSegmentCount = 16;
@@ -67,6 +75,10 @@ bool is_segmented_address(uint32_t value) {
 
 bool is_rdp_opcode(uint32_t opcode) {
     return opcode >= 0xE4u || opcode == 0xB8u || opcode == 0xBAu || opcode == 0xBBu || opcode == 0xBCu;
+}
+
+bool is_rsp_opcode(uint32_t opcode) {
+    return !is_rdp_opcode(opcode);
 }
 
 bool decode_segment_move_word(uint32_t w0, uint32_t w1, std::array<uint32_t, kSegmentCount>& segments) {
@@ -125,8 +137,147 @@ void record_command_preview(GoldenEyeRendererTaskResult& result, uint64_t comman
     }
 }
 
+void record_texture_image_preview(GoldenEyeRendererTaskResult& result, uint32_t image_addr) {
+    if (result.first_texture_image_count >= result.first_texture_images.size()) {
+        return;
+    }
+    const auto begin = result.first_texture_images.begin();
+    const auto end = begin + static_cast<std::ptrdiff_t>(result.first_texture_image_count);
+    if (std::find(begin, end, image_addr) != end) {
+        return;
+    }
+    result.first_texture_images[result.first_texture_image_count++] = image_addr;
+}
+
 bool stack_contains(const std::vector<uint32_t>& stack, uint32_t vaddr) {
     return std::find(stack.begin(), stack.end(), vaddr) != stack.end();
+}
+
+void classify_command(
+    uint8_t* rdram,
+    uint32_t w0,
+    uint32_t w1,
+    const std::array<uint32_t, kSegmentCount>& segments,
+    GoldenEyeRendererTaskResult& result) {
+    const uint32_t opcode = w0 >> 24;
+    result.opcode_histogram[opcode]++;
+
+    if (is_rdp_opcode(opcode)) {
+        result.rdp_commands++;
+    } else {
+        result.rsp_commands++;
+    }
+
+    switch (opcode) {
+    case kGbiMatrix:
+        result.matrix_commands++;
+        break;
+    case kGbiVertex:
+        result.vertex_commands++;
+        break;
+    case kGbiTexture:
+        result.texture_commands++;
+        break;
+    case kGbiTriangle1:
+        result.triangle_commands++;
+        result.presentation_packets++;
+        break;
+    case kGbiSetGeometryMode:
+    case kGbiClearGeometryMode:
+        result.geometry_mode_commands++;
+        break;
+    case 0xE6u: // RDPLoadSync
+    case 0xE7u: // RDPPipeSync
+    case 0xE8u: // RDPTileSync
+    case 0xE9u: // RDPFullSync
+        result.sync_commands++;
+        break;
+    case 0xEFu: // SetOtherMode
+    case 0xB9u: // SetOtherMode_L in several GoldenEye display lists
+    case 0xBAu: // SetOtherMode_H in several GoldenEye display lists
+        result.othermode_commands++;
+        break;
+    case 0xF2u: // SetTileSize
+    case 0xF5u: // SetTile
+        result.tile_setup_commands++;
+        break;
+    case 0xF0u: // LoadTLUT
+    case 0xF3u: // LoadBlock
+    case 0xF4u: // LoadTile
+        result.texture_load_commands++;
+        result.presentation_packets++;
+        break;
+    case 0xF6u: // FillRect
+        result.fill_rect_commands++;
+        result.presentation_packets++;
+        break;
+    case 0xFCu: // SetCombine
+        result.combine_mode_commands++;
+        break;
+    case 0xFDu: // SetTextureImage
+        result.texture_image_commands++;
+        if (is_segmented_address(w1)) {
+            result.texture_image_segmented_refs++;
+            uint32_t resolved_image = 0;
+            if (resolve_segmented_address(w1, segments, &resolved_image)) {
+                uint8_t* image_ptr = nullptr;
+                if (goldeneye_runtime_translate(rdram, resolved_image, 1, &image_ptr)) {
+                    result.resolved_texture_image_refs++;
+                } else {
+                    result.unresolved_texture_image_refs++;
+                }
+                record_texture_image_preview(result, resolved_image);
+            } else {
+                result.unresolved_texture_image_refs++;
+                record_texture_image_preview(result, w1);
+            }
+        } else {
+            record_texture_image_preview(result, w1);
+        }
+        break;
+    case 0xFEu: // SetDepthImage / Z image
+        result.depth_image_commands++;
+        break;
+    case 0xFFu: // SetColorImage
+        result.color_image_commands++;
+        break;
+    default:
+        break;
+    }
+}
+
+void print_top_opcodes(const GoldenEyeRendererTaskResult& result) {
+    std::array<uint8_t, 256> opcodes{};
+    for (std::size_t i = 0; i < opcodes.size(); ++i) {
+        opcodes[i] = static_cast<uint8_t>(i);
+    }
+
+    std::sort(opcodes.begin(), opcodes.end(), [&result](uint8_t lhs, uint8_t rhs) {
+        const uint32_t lhs_count = result.opcode_histogram[lhs];
+        const uint32_t rhs_count = result.opcode_histogram[rhs];
+        if (lhs_count != rhs_count) {
+            return lhs_count > rhs_count;
+        }
+        return lhs < rhs;
+    });
+
+    std::size_t printed = 0;
+    std::printf("host_renderer_opcode_histogram");
+    for (uint8_t opcode : opcodes) {
+        const uint32_t count = result.opcode_histogram[opcode];
+        if (count == 0) {
+            continue;
+        }
+        std::printf(" op%02X=%u", opcode, count);
+        printed++;
+        if (printed >= 12) {
+            break;
+        }
+    }
+    if (printed == 0) {
+        std::printf(" none");
+    }
+    std::printf("\n");
 }
 
 void scan_display_list(
@@ -193,13 +344,11 @@ void scan_display_list(
 
         const uint32_t opcode = w0 >> 24;
         decode_segment_move_word(w0, w1, segments);
+        classify_command(rdram, w0, w1, segments, result);
 
         result.commands_scanned++;
         if (depth > 0) {
             result.branch_commands_scanned++;
-        }
-        if (is_rdp_opcode(opcode)) {
-            result.rdp_commands++;
         }
         if (opcode == kGbiEndDisplayList) {
             result.enddl_commands++;
@@ -286,7 +435,7 @@ GoldenEyeRendererTaskResult goldeneye_renderer_execute_display_list_task(
 
 void goldeneye_renderer_print_task_result(const GoldenEyeRendererTaskResult& result) {
     std::printf(
-        "host_renderer_execute first_gdl=0x%08X end_gdl=0x%08X bytes=0x%X top_commands=%u scanned=%u lists=%u max_depth=%u branch_dl=%u segmented_refs=%u resolved_segmented_refs=%u unresolved_refs=%u branch_scanned=%u rdp_commands=%u enddl=%u cycles=%u limit_hit=%d list_limit_hit=%d depth_limit_hit=%d\n",
+        "host_renderer_execute first_gdl=0x%08X end_gdl=0x%08X bytes=0x%X top_commands=%u scanned=%u lists=%u max_depth=%u branch_dl=%u segmented_refs=%u resolved_segmented_refs=%u unresolved_refs=%u branch_scanned=%u rsp_commands=%u rdp_commands=%u enddl=%u cycles=%u limit_hit=%d list_limit_hit=%d depth_limit_hit=%d\n",
         result.first_gdl,
         result.end_gdl,
         result.dlist_bytes,
@@ -299,12 +448,36 @@ void goldeneye_renderer_print_task_result(const GoldenEyeRendererTaskResult& res
         result.resolved_segmented_references,
         result.unresolved_references,
         result.branch_commands_scanned,
+        result.rsp_commands,
         result.rdp_commands,
         result.enddl_commands,
         result.cycle_references,
         result.command_limit_hit ? 1 : 0,
         result.list_limit_hit ? 1 : 0,
         result.depth_limit_hit ? 1 : 0);
+
+    std::printf(
+        "host_renderer_presentation matrix=%u vertex=%u texture=%u triangles=%u geom_mode=%u tex_images=%u tex_segmented=%u tex_resolved=%u tex_unresolved=%u color_images=%u depth_images=%u tile_setup=%u texture_loads=%u combine=%u sync=%u fill_rect=%u othermode=%u packets=%u\n",
+        result.matrix_commands,
+        result.vertex_commands,
+        result.texture_commands,
+        result.triangle_commands,
+        result.geometry_mode_commands,
+        result.texture_image_commands,
+        result.texture_image_segmented_refs,
+        result.resolved_texture_image_refs,
+        result.unresolved_texture_image_refs,
+        result.color_image_commands,
+        result.depth_image_commands,
+        result.tile_setup_commands,
+        result.texture_load_commands,
+        result.combine_mode_commands,
+        result.sync_commands,
+        result.fill_rect_commands,
+        result.othermode_commands,
+        result.presentation_packets);
+
+    print_top_opcodes(result);
 
     for (std::size_t i = 0; i < result.first_command_count; ++i) {
         std::printf("  host_renderer_dlist[%zu]=0x%08X_%08X\n",
@@ -317,5 +490,8 @@ void goldeneye_renderer_print_task_result(const GoldenEyeRendererTaskResult& res
             i,
             static_cast<uint32_t>(result.branch_first_commands[i] >> 32),
             static_cast<uint32_t>(result.branch_first_commands[i]));
+    }
+    for (std::size_t i = 0; i < result.first_texture_image_count; ++i) {
+        std::printf("  host_renderer_texture_image[%zu]=0x%08X\n", i, result.first_texture_images[i]);
     }
 }

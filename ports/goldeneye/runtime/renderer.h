@@ -16,10 +16,30 @@ struct GoldenEyeRendererTaskResult {
     uint32_t segmented_references{};
     uint32_t resolved_segmented_references{};
     uint32_t unresolved_references{};
+    uint32_t rsp_commands{};
     uint32_t rdp_commands{};
     uint32_t enddl_commands{};
     uint32_t cycle_references{};
     uint32_t branch_commands_scanned{};
+    uint32_t matrix_commands{};
+    uint32_t vertex_commands{};
+    uint32_t texture_commands{};
+    uint32_t triangle_commands{};
+    uint32_t geometry_mode_commands{};
+    uint32_t texture_image_commands{};
+    uint32_t texture_image_segmented_refs{};
+    uint32_t resolved_texture_image_refs{};
+    uint32_t unresolved_texture_image_refs{};
+    uint32_t color_image_commands{};
+    uint32_t depth_image_commands{};
+    uint32_t tile_setup_commands{};
+    uint32_t texture_load_commands{};
+    uint32_t combine_mode_commands{};
+    uint32_t sync_commands{};
+    uint32_t fill_rect_commands{};
+    uint32_t othermode_commands{};
+    uint32_t presentation_packets{};
+    std::array<uint32_t, 256> opcode_histogram{};
     bool command_limit_hit{};
     bool list_limit_hit{};
     bool depth_limit_hit{};
@@ -27,6 +47,8 @@ struct GoldenEyeRendererTaskResult {
     std::size_t first_command_count{};
     std::array<uint64_t, 8> branch_first_commands{};
     std::size_t branch_first_command_count{};
+    std::array<uint32_t, 8> first_texture_images{};
+    std::size_t first_texture_image_count{};
 };
 
 GoldenEyeRendererTaskResult goldeneye_renderer_execute_display_list_task(
