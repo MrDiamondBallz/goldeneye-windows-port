@@ -13,16 +13,16 @@ This is **not** an emulator frontend, and the repo does **not** ship game files.
 | Runtime memory | Sparse 4 GiB+ host address space mirrors N64Recomp low-address aliasing for `0x700...`, `0x7F...`, and KSEG0 access patterns. |
 | Boot path | Guarded execution reaches `recomp_entrypoint -> boot bridge -> generated init -> generated mainproc`. |
 | Runtime primitives | First-pass ROM DMA, message queues, cooperative thread records, VI framebuffer bookkeeping, timing helpers, and guarded probes are implemented. |
-| Current blocker | Guarded `mainproc` now clears `guPerspectiveF`, advances through host-simulated frame ticks, consumes generated RSP/display-list tasks, recursively walks the first bounded display-list task, emits presentation command summaries, and delivers scheduler done messages back to the game loop. |
+| Current blocker | Guarded `mainproc` now clears `guPerspectiveF`, advances through host-simulated frame ticks, consumes generated RSP/display-list tasks, recursively walks the first bounded display-list task, emits backend packet previews, and delivers scheduler done messages back to the game loop. |
 
 Latest verified normal probe:
 
 ```text
 controlled_probe_result=OK boot_primitives_enabled safe_generated_dispatch_enabled
-next_runtime_blocker=renderer emits bounded presentation command summaries; next layer is RT64/custom backend mapping and texture/runtime validation
+next_runtime_blocker=renderer emits backend packet previews; next layer is texture address validation and RT64/custom command translation
 ```
 
-The game does **not** boot yet. The next milestone is turning the bounded presentation summaries into a real backend path: map the parsed F3DEX/RDP command stream into RT64 or a custom renderer, validate texture/image references, and tighten the remaining runtime placeholders behind the generated game loop.
+The game does **not** boot yet. The next milestone is turning the backend packet previews into executable renderer commands: validate texture/image addresses correctly, then translate F3DEX/RDP packets into RT64 or a custom presentation backend while tightening the remaining runtime placeholders behind the generated game loop.
 
 ## Legal boundary
 
@@ -106,7 +106,7 @@ The guarded probe forks a child process, installs signal diagnostics, and uses a
 - Probe contexts now initialize the N64Recomp odd-FPR pointer (`f_odd`) for MIPS3 float mode, which clears the previous `guPerspectiveF` crash.
 - Scheduler message reads can synthesize retrace messages for blocking waits, and `waitForNextFrame` is now a deterministic host frame tick that updates the original frame-counter globals.
 - Debug registry, early audio, memory-pool resizing, and generic compressed-asset expansion are probe-only placeholders so the guarded path can advance to the next major runtime seam.
-- The host renderer shim now recursively walks generated display-list tasks (`host_renderer_execute`) with bounded command/list/depth limits, classifies RSP/RDP presentation commands, prints a top-opcode histogram, and previews texture image references. The latest guarded first task scans `2236` commands across `4` display lists, reaches depth `1`, resolves all `3` segmented branch-list references, sees `1716` RSP-style and `520` RDP-style commands, summarizes `29` matrix, `14` vertex, `10` triangle, `16` texture-image, `226` tile-setup, `38` texture-load, `14` combine, and `58` presentation packet commands, queues `OS_SC_DONE_MSG` back into `gfxFrameMsgQ`, and stops after the bounded done message. RT64/custom presentation, texture memory validation, scheduler, video, audio, input, and controller behavior are still skeletal runtime replacements.
+- The host renderer shim now recursively walks generated display-list tasks (`host_renderer_execute`) with bounded command/list/depth limits, classifies RSP/RDP presentation commands, prints a top-opcode histogram, previews texture image references, and emits the first backend packet records (`host_renderer_backend_packet[...]`) with opcode names, raw words, and optional resolved addresses. The latest guarded first task scans `2236` commands across `4` display lists, reaches depth `1`, resolves all `3` segmented branch-list references, sees `1716` RSP-style and `520` RDP-style commands, summarizes `29` matrix, `14` vertex, `10` triangle, `16` texture-image, `226` tile-setup, `38` texture-load, `14` combine, and `58` presentation packet commands, queues `OS_SC_DONE_MSG` back into `gfxFrameMsgQ`, and stops after the bounded done message. A two-task guarded probe (`GOLDENEYE_RSP_TASK_LIMIT=2`) now advances through two scheduler-done cycles with the same renderer summary shape. RT64/custom presentation, texture address validation, scheduler, video, audio, input, and controller behavior are still skeletal runtime replacements.
 
 ## Documentation
 

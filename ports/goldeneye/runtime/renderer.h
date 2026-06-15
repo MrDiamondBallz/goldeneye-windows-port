@@ -4,6 +4,14 @@
 #include <cstddef>
 #include <cstdint>
 
+struct GoldenEyeRendererPacketPreview {
+    uint8_t opcode{};
+    uint32_t w0{};
+    uint32_t w1{};
+    uint32_t resolved_address{};
+    bool has_resolved_address{};
+};
+
 struct GoldenEyeRendererTaskResult {
     uint32_t first_gdl{};
     uint32_t end_gdl{};
@@ -49,6 +57,8 @@ struct GoldenEyeRendererTaskResult {
     std::size_t branch_first_command_count{};
     std::array<uint32_t, 8> first_texture_images{};
     std::size_t first_texture_image_count{};
+    std::array<GoldenEyeRendererPacketPreview, 16> backend_packet_previews{};
+    std::size_t backend_packet_preview_count{};
 };
 
 GoldenEyeRendererTaskResult goldeneye_renderer_execute_display_list_task(

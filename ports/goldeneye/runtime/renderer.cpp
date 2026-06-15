@@ -149,6 +149,52 @@ void record_texture_image_preview(GoldenEyeRendererTaskResult& result, uint32_t 
     result.first_texture_images[result.first_texture_image_count++] = image_addr;
 }
 
+void record_backend_packet_preview(
+    GoldenEyeRendererTaskResult& result,
+    uint32_t opcode,
+    uint32_t w0,
+    uint32_t w1,
+    uint32_t resolved_address = 0,
+    bool has_resolved_address = false) {
+    if (result.backend_packet_preview_count >= result.backend_packet_previews.size()) {
+        return;
+    }
+    GoldenEyeRendererPacketPreview& packet = result.backend_packet_previews[result.backend_packet_preview_count++];
+    packet.opcode = static_cast<uint8_t>(opcode);
+    packet.w0 = w0;
+    packet.w1 = w1;
+    packet.resolved_address = resolved_address;
+    packet.has_resolved_address = has_resolved_address;
+}
+
+const char* backend_packet_name(uint8_t opcode) {
+    switch (opcode) {
+    case kGbiMatrix: return "matrix";
+    case kGbiVertex: return "vertex";
+    case kGbiTriangle1: return "tri1";
+    case kGbiTexture: return "texture";
+    case kGbiSetGeometryMode: return "set_geom";
+    case kGbiClearGeometryMode: return "clear_geom";
+    case 0xE6u: return "load_sync";
+    case 0xE7u: return "pipe_sync";
+    case 0xE8u: return "tile_sync";
+    case 0xE9u: return "full_sync";
+    case 0xF0u: return "load_tlut";
+    case 0xF2u: return "set_tile_size";
+    case 0xF3u: return "load_block";
+    case 0xF4u: return "load_tile";
+    case 0xF5u: return "set_tile";
+    case 0xF6u: return "fill_rect";
+    case 0xFCu: return "set_combine";
+    case 0xFDu: return "set_texture_image";
+    case 0xFEu: return "set_depth_image";
+    case 0xFFu: return "set_color_image";
+    case 0xB9u: return "set_othermode_l";
+    case 0xBAu: return "set_othermode_h";
+    default: return "unknown";
+    }
+}
+
 bool stack_contains(const std::vector<uint32_t>& stack, uint32_t vaddr) {
     return std::find(stack.begin(), stack.end(), vaddr) != stack.end();
 }
@@ -168,60 +214,81 @@ void classify_command(
         result.rsp_commands++;
     }
 
+    bool preview_backend_packet = false;
+    bool has_resolved_address = false;
+    uint32_t resolved_address = 0;
+
     switch (opcode) {
     case kGbiMatrix:
         result.matrix_commands++;
+        preview_backend_packet = true;
         break;
     case kGbiVertex:
         result.vertex_commands++;
+        preview_backend_packet = true;
+        if (is_segmented_address(w1) && resolve_segmented_address(w1, segments, &resolved_address)) {
+            has_resolved_address = true;
+        }
         break;
     case kGbiTexture:
         result.texture_commands++;
+        preview_backend_packet = true;
         break;
     case kGbiTriangle1:
         result.triangle_commands++;
         result.presentation_packets++;
+        preview_backend_packet = true;
         break;
     case kGbiSetGeometryMode:
     case kGbiClearGeometryMode:
         result.geometry_mode_commands++;
+        preview_backend_packet = true;
         break;
     case 0xE6u: // RDPLoadSync
     case 0xE7u: // RDPPipeSync
     case 0xE8u: // RDPTileSync
     case 0xE9u: // RDPFullSync
         result.sync_commands++;
+        preview_backend_packet = true;
         break;
     case 0xEFu: // SetOtherMode
     case 0xB9u: // SetOtherMode_L in several GoldenEye display lists
     case 0xBAu: // SetOtherMode_H in several GoldenEye display lists
         result.othermode_commands++;
+        preview_backend_packet = true;
         break;
     case 0xF2u: // SetTileSize
     case 0xF5u: // SetTile
         result.tile_setup_commands++;
+        preview_backend_packet = true;
         break;
     case 0xF0u: // LoadTLUT
     case 0xF3u: // LoadBlock
     case 0xF4u: // LoadTile
         result.texture_load_commands++;
         result.presentation_packets++;
+        preview_backend_packet = true;
         break;
     case 0xF6u: // FillRect
         result.fill_rect_commands++;
         result.presentation_packets++;
+        preview_backend_packet = true;
         break;
     case 0xFCu: // SetCombine
         result.combine_mode_commands++;
+        preview_backend_packet = true;
         break;
     case 0xFDu: // SetTextureImage
         result.texture_image_commands++;
+        preview_backend_packet = true;
         if (is_segmented_address(w1)) {
             result.texture_image_segmented_refs++;
             uint32_t resolved_image = 0;
             if (resolve_segmented_address(w1, segments, &resolved_image)) {
                 uint8_t* image_ptr = nullptr;
-                if (goldeneye_runtime_translate(rdram, resolved_image, 1, &image_ptr)) {
+                resolved_address = resolved_image;
+                has_resolved_address = goldeneye_runtime_translate(rdram, resolved_image, 1, &image_ptr);
+                if (has_resolved_address) {
                     result.resolved_texture_image_refs++;
                 } else {
                     result.unresolved_texture_image_refs++;
@@ -237,12 +304,18 @@ void classify_command(
         break;
     case 0xFEu: // SetDepthImage / Z image
         result.depth_image_commands++;
+        preview_backend_packet = true;
         break;
     case 0xFFu: // SetColorImage
         result.color_image_commands++;
+        preview_backend_packet = true;
         break;
     default:
         break;
+    }
+
+    if (preview_backend_packet) {
+        record_backend_packet_preview(result, opcode, w0, w1, resolved_address, has_resolved_address);
     }
 }
 
@@ -478,6 +551,19 @@ void goldeneye_renderer_print_task_result(const GoldenEyeRendererTaskResult& res
         result.presentation_packets);
 
     print_top_opcodes(result);
+
+    for (std::size_t i = 0; i < result.backend_packet_preview_count; ++i) {
+        const GoldenEyeRendererPacketPreview& packet = result.backend_packet_previews[i];
+        std::printf(
+            "  host_renderer_backend_packet[%zu]=%s op=0x%02X w0=0x%08X w1=0x%08X resolved=0x%08X valid=%d\n",
+            i,
+            backend_packet_name(packet.opcode),
+            packet.opcode,
+            packet.w0,
+            packet.w1,
+            packet.resolved_address,
+            packet.has_resolved_address ? 1 : 0);
+    }
 
     for (std::size_t i = 0; i < result.first_command_count; ++i) {
         std::printf("  host_renderer_dlist[%zu]=0x%08X_%08X\n",

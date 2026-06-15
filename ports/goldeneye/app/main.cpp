@@ -279,6 +279,6 @@ int main() {
     maybe_run_guarded_entrypoint(rdram);
 
     std::printf("controlled_probe_result=OK boot_primitives_enabled safe_generated_dispatch_enabled\n");
-    std::printf("next_runtime_blocker=renderer emits bounded presentation command summaries; next layer is RT64/custom backend mapping and texture/runtime validation\n");
+    std::printf("next_runtime_blocker=renderer emits backend packet previews; next layer is texture address validation and RT64/custom command translation\n");
     return 0;
 }
