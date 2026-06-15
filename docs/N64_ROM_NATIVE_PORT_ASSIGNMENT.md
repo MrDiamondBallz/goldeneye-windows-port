@@ -272,10 +272,10 @@ metadata get_csegmentSegmentStart 0x700004BC -> FOUND dispatch=ENABLED
 probe get_csegmentSegmentStart -> OK r2=0xFFFFFFFF80020D90 sp=0xFFFFFFFF807FF000
 metadata return_null 0x7F06C46C -> FOUND dispatch=ENABLED
 probe return_null -> OK r2=0x0000000000000000 sp=0xFFFFFFFF807FF000
-runtime_primitives: rom_bytes=12582912 dma_copies=6 dma_bytes=1146464 queues_created=1 messages_sent=2 messages_received=1 threads_created=1 threads_started=1 threads_dispatched=0
+runtime_primitives: rom_bytes=12582912 dma_copies=6 dma_bytes=1146464 queues_created=1 messages_sent=2 messages_received=1 threads_created=1 threads_started=1 threads_dispatched=0 rsp_tasks_started=0 rsp_done_messages_delivered=0
 entrypoint_probe=skipped set GOLDENEYE_TRY_ENTRYPOINT=1 to attempt guarded child process
 controlled_probe_result=OK boot_primitives_enabled safe_generated_dispatch_enabled
-next_runtime_blocker=guarded render path reaches first RSP/display-list task boundary; host renderer/scheduler handoff is the next runtime layer
+next_runtime_blocker=guarded render path consumes RSP/display-list tasks and delivers scheduler done messages; host renderer/RT64 task execution is the next runtime layer
 ```
 
 Guarded entrypoint/main-thread probe:
@@ -289,16 +289,19 @@ thread_records count=2
 thread_dispatch id=3 entry=0x7000089C stack=0x803B3948 priority=10 dispatch=ENABLED
 host_frame_tick count=1 delta=1 currentFrameCounter=1 os_count=0x000BD6C3
 host_frame_tick count=2 delta=1 currentFrameCounter=2 os_count=0x0017AD86
-host_rsp_task_start count=1 first_gdl=0x8011B320 end_gdl=0x8011BC98 flags=0x00000000 done_msg=0x803B38EC frame_ticks=2
-host_rsp_task_boundary reached count=1; set GOLDENEYE_CONTINUE_AFTER_RSP_TASK=1 to continue into skeletal scheduler/renderer
-entrypoint_probe=attempted child_exit=151
+host_rsp_task_consume count=1 first_gdl=0x8011B320 end_gdl=0x8011BC98 dlist_bytes=0x978 dlist_commands=303 flags=0x00000000 done_msg=0x803B38EC frame_ticks=2
+host_rsp_dlist[0]=0xBC000006_00000000
+host_rsp_task_done_queued count=1 queue=0x8005D9A0 msg=0x803B38EC type=2 queued=1 limit=1
+host_rsp_task_done_delivered queue=0x8005D9A0 msg=0x803B38EC type=2 limit=1
+host_rsp_task_consume_limit reached delivered=1; set GOLDENEYE_CONTINUE_AFTER_RSP_TASK=1 or GOLDENEYE_RSP_TASK_LIMIT=N to continue
+entrypoint_probe=attempted child_exit=152
 ```
 
 The produced local binary is ignored and not committed:
 
 ```text
 ports/goldeneye/build-native-spike/goldeneye_native_spike
-SHA256 c397b6fa9fe6d60a8d43f0cfc1c8098edf87918a8b9551691a0341411717dec1
+SHA256 37d6be0a5ebd0a749703533c41421ae9dcb77908f3cb8ec6a1e35619b3df1f7e
 ```
 
 This now proves:
@@ -307,7 +310,7 @@ This now proves:
 2. the harness reserves a sparse host address space that matches N64Recomp low-address aliasing and maps the direct `0x80000400` section plus low-address `0x700...` / `0x7F...` sections into host memory;
 3. the compressed cdata block is preloaded at `_csegmentSegmentStart`, allowing generated `init` to execute; the guarded child restores the local-only decomp ELF `.csegment` at the `initTLBPrepareContext` seam while generated inflate/TLB behavior remains incomplete;
 4. first-pass ROM DMA, message queue, cooperative thread, VI framebuffer, and timing primitives execute in the host runtime;
-5. guarded `recomp_entrypoint` dispatch is isolated in a child process and now progresses through `recomp_entrypoint -> boot bridge -> generated init -> generated mainproc`, dispatching recorded thread id `3` past the debug registry and early audio/asset placeholders, through `guPerspectiveF`, through host frame ticks, and to the first generated RSP/display-list task. Probe contexts initialize N64Recomp's odd-FPR pointer (`f_odd`) for MIPS3 float mode; without that, generated `guPerspectiveF` faulted while writing odd float registers.
+5. guarded `recomp_entrypoint` dispatch is isolated in a child process and now progresses through `recomp_entrypoint -> boot bridge -> generated init -> generated mainproc`, dispatching recorded thread id `3` past the debug registry and early audio/asset placeholders, through `guPerspectiveF`, through host frame ticks, and into a host shim that consumes generated RSP/display-list tasks and delivers scheduler done messages back to `gfxFrameMsgQ`. Probe contexts initialize N64Recomp's odd-FPR pointer (`f_odd`) for MIPS3 float mode; without that, generated `guPerspectiveF` faulted while writing odd float registers.
 
-It does **not** boot the game yet. The next blocker is the native renderer/scheduler handoff: consume the first display-list task, surface useful RSP/RDP task metadata, and decide where RT64 or a custom host presentation layer takes ownership.
+It does **not** boot the game yet. The next blocker is real native renderer execution: hand the consumed display-list/RSP task to RT64 or a custom presentation layer instead of treating it as instantly complete.
 

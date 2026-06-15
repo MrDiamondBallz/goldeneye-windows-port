@@ -32,6 +32,14 @@ int32_t read_runtime_word(uint8_t* rdram, uint32_t addr) {
     return MEM_W(0, S32(addr));
 }
 
+int16_t read_runtime_half(uint8_t* rdram, uint32_t addr) {
+    uint8_t* ptr = nullptr;
+    if (!goldeneye_runtime_translate(rdram, addr, sizeof(int16_t), &ptr)) {
+        return 0;
+    }
+    return MEM_H(0, S32(addr));
+}
+
 void write_runtime_word(uint8_t* rdram, uint32_t addr, int32_t value) {
     uint8_t* ptr = nullptr;
     if (!goldeneye_runtime_translate(rdram, addr, sizeof(int32_t), &ptr)) {
@@ -53,9 +61,29 @@ uint32_t frame_tick_limit() {
     return static_cast<uint32_t>(parsed);
 }
 
-bool continue_after_rsp_task_boundary() {
-    const char* value = std::getenv("GOLDENEYE_CONTINUE_AFTER_RSP_TASK");
-    return value != nullptr && value[0] != '\0' && value[0] != '0';
+bool enqueue_runtime_message(uint8_t* rdram, uint32_t queue, uint32_t message) {
+    constexpr uint32_t kQueueValidOffset = 0x08u;
+    constexpr uint32_t kQueueFirstOffset = 0x0Cu;
+    constexpr uint32_t kQueueCountOffset = 0x10u;
+    constexpr uint32_t kQueueMsgBufOffset = 0x14u;
+
+    if (queue == 0) {
+        return false;
+    }
+
+    const int32_t valid = read_runtime_word(rdram, queue + kQueueValidOffset);
+    const int32_t first = read_runtime_word(rdram, queue + kQueueFirstOffset);
+    const int32_t count = read_runtime_word(rdram, queue + kQueueCountOffset);
+    const uint32_t msg_buf = static_cast<uint32_t>(read_runtime_word(rdram, queue + kQueueMsgBufOffset));
+    if (count <= 0 || valid < 0 || valid >= count || msg_buf == 0) {
+        return false;
+    }
+
+    const int32_t slot = (first + valid) % count;
+    write_runtime_word(rdram, msg_buf + static_cast<uint32_t>(slot * 4), static_cast<int32_t>(message));
+    write_runtime_word(rdram, queue + kQueueValidOffset, valid + 1);
+    goldeneye_runtime_record_message_sent();
+    return true;
 }
 
 void write_runtime_half(uint8_t* rdram, uint32_t addr, int16_t value) {
@@ -265,35 +293,52 @@ void rspGfxTaskStart(uint8_t* rdram, recomp_context* ctx) {
     }
 
     constexpr int16_t kOsScDoneMsg = 2;
+    constexpr uint32_t kGfxFrameMsgQueue = 0x8005D9A0u;
+    constexpr uint32_t kGfxWordsToPreview = 4;
     const uint32_t first_gdl = static_cast<uint32_t>(ctx->r4);
     const uint32_t end_gdl = static_cast<uint32_t>(ctx->r5);
     const uint32_t flags = static_cast<uint32_t>(ctx->r6);
     const uint32_t done_msg = static_cast<uint32_t>(ctx->r7);
+    const uint32_t dlist_bytes = end_gdl >= first_gdl ? end_gdl - first_gdl : 0;
+    const uint32_t dlist_commands = dlist_bytes / 8u;
 
     g_host_rsp_tasks++;
+    goldeneye_runtime_record_rsp_task_started();
     std::printf(
-        "host_rsp_task_start count=%u first_gdl=0x%08X end_gdl=0x%08X flags=0x%08X done_msg=0x%08X frame_ticks=%u\n",
+        "host_rsp_task_consume count=%u first_gdl=0x%08X end_gdl=0x%08X dlist_bytes=0x%X dlist_commands=%u flags=0x%08X done_msg=0x%08X frame_ticks=%u\n",
         g_host_rsp_tasks,
         first_gdl,
         end_gdl,
+        dlist_bytes,
+        dlist_commands,
         flags,
         done_msg,
         g_host_frame_ticks);
-    std::fflush(stdout);
+
+    const uint32_t preview_count = dlist_commands < kGfxWordsToPreview ? dlist_commands : kGfxWordsToPreview;
+    for (uint32_t i = 0; i < preview_count; ++i) {
+        const uint32_t cmd = first_gdl + i * 8u;
+        std::printf("  host_rsp_dlist[%u]=0x%08X_%08X\n",
+            i,
+            static_cast<uint32_t>(read_runtime_word(rdram, cmd)),
+            static_cast<uint32_t>(read_runtime_word(rdram, cmd + 4u)));
+    }
 
     if (done_msg != 0) {
         write_runtime_half(rdram, done_msg, kOsScDoneMsg);
     }
 
-    ctx->r2 = 0;
+    const bool queued_done = done_msg != 0 && enqueue_runtime_message(rdram, kGfxFrameMsgQueue, done_msg);
+    std::printf("host_rsp_task_done_queued count=%u queue=0x%08X msg=0x%08X type=%d queued=%d limit=%zu\n",
+        g_host_rsp_tasks,
+        kGfxFrameMsgQueue,
+        done_msg,
+        done_msg != 0 ? static_cast<int>(read_runtime_half(rdram, done_msg)) : 0,
+        queued_done ? 1 : 0,
+        goldeneye_runtime_rsp_task_limit());
+    std::fflush(stdout);
 
-    if (!continue_after_rsp_task_boundary()) {
-        std::fprintf(stderr,
-            "host_rsp_task_boundary reached count=%u; set GOLDENEYE_CONTINUE_AFTER_RSP_TASK=1 to continue into skeletal scheduler/renderer\n",
-            g_host_rsp_tasks);
-        std::fflush(stderr);
-        std::_Exit(151);
-    }
+    ctx->r2 = queued_done ? 0 : -1;
 }
 
 void eqpower(uint8_t* rdram, recomp_context* ctx) {

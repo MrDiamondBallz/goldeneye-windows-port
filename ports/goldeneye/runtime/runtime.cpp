@@ -214,7 +214,7 @@ GoldenEyeRuntimeDiagnostics goldeneye_runtime_get_diagnostics() {
 
 void goldeneye_runtime_print_diagnostics() {
     const GoldenEyeRuntimeDiagnostics diag = goldeneye_runtime_get_diagnostics();
-    std::printf("runtime_primitives: rom_bytes=%zu dma_copies=%zu dma_bytes=%zu queues_created=%zu messages_sent=%zu messages_received=%zu threads_created=%zu threads_started=%zu threads_dispatched=%zu\n",
+    std::printf("runtime_primitives: rom_bytes=%zu dma_copies=%zu dma_bytes=%zu queues_created=%zu messages_sent=%zu messages_received=%zu threads_created=%zu threads_started=%zu threads_dispatched=%zu rsp_tasks_started=%zu rsp_done_messages_delivered=%zu\n",
         diag.rom_bytes,
         diag.dma_copies,
         diag.dma_bytes,
@@ -223,7 +223,9 @@ void goldeneye_runtime_print_diagnostics() {
         diag.messages_received,
         diag.threads_created,
         diag.threads_started,
-        diag.threads_dispatched);
+        diag.threads_dispatched,
+        diag.rsp_tasks_started,
+        diag.rsp_done_messages_delivered);
 }
 
 void goldeneye_runtime_record_queue_created() { g_diag.queues_created++; }
@@ -232,6 +234,31 @@ void goldeneye_runtime_record_message_received() { g_diag.messages_received++; }
 void goldeneye_runtime_record_thread_created() { g_diag.threads_created++; }
 void goldeneye_runtime_record_thread_started() { g_diag.threads_started++; }
 void goldeneye_runtime_record_thread_dispatched() { g_diag.threads_dispatched++; }
+void goldeneye_runtime_record_rsp_task_started() { g_diag.rsp_tasks_started++; }
+void goldeneye_runtime_record_rsp_done_message_delivered() { g_diag.rsp_done_messages_delivered++; }
+
+bool goldeneye_runtime_continue_after_rsp_task() {
+    const char* value = std::getenv("GOLDENEYE_CONTINUE_AFTER_RSP_TASK");
+    return value != nullptr && value[0] != '\0' && value[0] != '0';
+}
+
+std::size_t goldeneye_runtime_rsp_task_limit() {
+    const char* value = std::getenv("GOLDENEYE_RSP_TASK_LIMIT");
+    if (value == nullptr || value[0] == '\0') {
+        return 1;
+    }
+    char* end = nullptr;
+    const unsigned long parsed = std::strtoul(value, &end, 10);
+    if (end == value || parsed == 0 || parsed > 1000) {
+        return 1;
+    }
+    return static_cast<std::size_t>(parsed);
+}
+
+bool goldeneye_runtime_should_stop_after_rsp_done() {
+    return !goldeneye_runtime_continue_after_rsp_task() &&
+        g_diag.rsp_done_messages_delivered >= goldeneye_runtime_rsp_task_limit();
+}
 
 bool goldeneye_has_function_metadata(uint32_t vram) {
     switch (vram) {

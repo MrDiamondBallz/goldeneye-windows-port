@@ -13,16 +13,16 @@ This is **not** an emulator frontend, and the repo does **not** ship game files.
 | Runtime memory | Sparse 4 GiB+ host address space mirrors N64Recomp low-address aliasing for `0x700...`, `0x7F...`, and KSEG0 access patterns. |
 | Boot path | Guarded execution reaches `recomp_entrypoint -> boot bridge -> generated init -> generated mainproc`. |
 | Runtime primitives | First-pass ROM DMA, message queues, cooperative thread records, VI framebuffer bookkeeping, timing helpers, and guarded probes are implemented. |
-| Current blocker | Guarded `mainproc` now clears `guPerspectiveF`, advances through host-simulated frame ticks, and stops at the first RSP/display-list task boundary. |
+| Current blocker | Guarded `mainproc` now clears `guPerspectiveF`, advances through host-simulated frame ticks, consumes generated RSP/display-list tasks, and delivers scheduler done messages back to the game loop. |
 
 Latest verified normal probe:
 
 ```text
 controlled_probe_result=OK boot_primitives_enabled safe_generated_dispatch_enabled
-next_runtime_blocker=guarded render path reaches first RSP/display-list task boundary; host renderer/scheduler handoff is the next runtime layer
+next_runtime_blocker=guarded render path consumes RSP/display-list tasks and delivers scheduler done messages; host renderer/RT64 task execution is the next runtime layer
 ```
 
-The game does **not** boot yet. The next milestone is the native renderer/scheduler handoff: consume the first generated display-list task, surface useful RSP/RDP task metadata, and decide where RT64 or a custom host presentation layer takes ownership.
+The game does **not** boot yet. The next milestone is real native renderer execution: hand the consumed RSP/display-list task to RT64 or a custom presentation layer instead of treating the task as instantly complete.
 
 ## Legal boundary
 
@@ -96,7 +96,7 @@ Optional guarded boot/main-thread probe:
 GOLDENEYE_TRY_ENTRYPOINT=1 GOLDENEYE_ENTRYPOINT_TIMEOUT_SEC=20 ports/goldeneye/build-native-spike/goldeneye_native_spike
 ```
 
-The guarded probe forks a child process, installs signal diagnostics, and uses an alarm so deeper generated-code execution cannot make the normal verification path unsafe. `GOLDENEYE_FRAME_TICK_LIMIT` can cap successful host-simulated frame ticks during runtime experiments. `GOLDENEYE_CONTINUE_AFTER_RSP_TASK=1` opts past the first display-list task boundary, but that path is intentionally not the default because the host renderer/scheduler is still skeletal.
+The guarded probe forks a child process, installs signal diagnostics, and uses an alarm so deeper generated-code execution cannot make the normal verification path unsafe. `GOLDENEYE_FRAME_TICK_LIMIT` can cap successful host-simulated frame ticks during runtime experiments. `GOLDENEYE_RSP_TASK_LIMIT=N` controls how many generated display-list tasks the host shim consumes before stopping; default is `1`. `GOLDENEYE_CONTINUE_AFTER_RSP_TASK=1` disables that stop, but that path is intentionally not the default because the host renderer is still skeletal.
 
 ## Current technical notes
 
@@ -106,7 +106,7 @@ The guarded probe forks a child process, installs signal diagnostics, and uses a
 - Probe contexts now initialize the N64Recomp odd-FPR pointer (`f_odd`) for MIPS3 float mode, which clears the previous `guPerspectiveF` crash.
 - Scheduler message reads can synthesize retrace messages for blocking waits, and `waitForNextFrame` is now a deterministic host frame tick that updates the original frame-counter globals.
 - Debug registry, early audio, memory-pool resizing, and generic compressed-asset expansion are probe-only placeholders so the guarded path can advance to the next major runtime seam.
-- The first generated RSP/display-list task is now a structured guarded boundary (`host_rsp_task_start`) instead of an alarm-driven hot loop. Scheduler, video, audio, input, and controller behavior are still skeletal runtime replacements.
+- The host shim now consumes generated RSP/display-list tasks (`host_rsp_task_consume`), previews display-list commands, queues `OS_SC_DONE_MSG` back into `gfxFrameMsgQ`, and stops after a bounded number of delivered done messages. Scheduler, video, audio, input, and controller behavior are still skeletal runtime replacements.
 
 ## Documentation
 

@@ -2,6 +2,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <vector>
 
@@ -16,7 +17,9 @@ constexpr int32_t kOsMesgBlock = 1;
 constexpr int32_t kOsError = -1;
 constexpr int32_t kOsOk = 0;
 constexpr uint32_t kSyntheticRetraceMsg = 0x807E0000u;
+constexpr uint32_t kGfxFrameMsgQueue = 0x8005D9A0u;
 constexpr int16_t kOsScRetraceMsg = 1;
+constexpr int16_t kOsScDoneMsg = 2;
 
 struct ThreadRecord {
     uint32_t thread{};
@@ -72,6 +75,13 @@ int32_t read_word(uint8_t* rdram, uint32_t addr) {
         return 0;
     }
     return MEM_W(0, sign32(addr));
+}
+
+int16_t read_half(uint8_t* rdram, uint32_t addr) {
+    if (!can_access(rdram, addr, sizeof(int16_t))) {
+        return 0;
+    }
+    return MEM_H(0, sign32(addr));
 }
 
 void write_word(uint8_t* rdram, uint32_t addr, int32_t value) {
@@ -328,6 +338,25 @@ void osRecvMesg_recomp(uint8_t* rdram, recomp_context* ctx) {
     write_word(rdram, queue + 0x0C, first);
     write_word(rdram, queue + 0x08, valid);
     goldeneye_runtime_record_message_received();
+
+    const int16_t message_type = message != 0 ? read_half(rdram, message) : 0;
+    if (queue == kGfxFrameMsgQueue && message_type == kOsScDoneMsg) {
+        goldeneye_runtime_record_rsp_done_message_delivered();
+        std::printf("host_rsp_task_done_delivered queue=0x%08X msg=0x%08X type=%d limit=%zu\n",
+            queue,
+            message,
+            static_cast<int>(message_type),
+            goldeneye_runtime_rsp_task_limit());
+        std::fflush(stdout);
+        if (goldeneye_runtime_should_stop_after_rsp_done()) {
+            std::fprintf(stderr,
+                "host_rsp_task_consume_limit reached delivered=%zu; set GOLDENEYE_CONTINUE_AFTER_RSP_TASK=1 or GOLDENEYE_RSP_TASK_LIMIT=N to continue\n",
+                goldeneye_runtime_get_diagnostics().rsp_done_messages_delivered);
+            std::fflush(stderr);
+            std::_Exit(152);
+        }
+    }
+
     set_result(ctx, kOsOk);
 }
 

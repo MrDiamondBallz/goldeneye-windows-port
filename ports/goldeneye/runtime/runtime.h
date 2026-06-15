@@ -36,6 +36,8 @@ struct GoldenEyeRuntimeDiagnostics {
     std::size_t threads_created{};
     std::size_t threads_started{};
     std::size_t threads_dispatched{};
+    std::size_t rsp_tasks_started{};
+    std::size_t rsp_done_messages_delivered{};
 };
 
 constexpr std::size_t kGoldenEyeRdramSize = 8 * 1024 * 1024;
@@ -52,6 +54,11 @@ void goldeneye_runtime_record_message_received();
 void goldeneye_runtime_record_thread_created();
 void goldeneye_runtime_record_thread_started();
 void goldeneye_runtime_record_thread_dispatched();
+void goldeneye_runtime_record_rsp_task_started();
+void goldeneye_runtime_record_rsp_done_message_delivered();
+bool goldeneye_runtime_continue_after_rsp_task();
+std::size_t goldeneye_runtime_rsp_task_limit();
+bool goldeneye_runtime_should_stop_after_rsp_done();
 std::size_t goldeneye_runtime_dispatch_started_threads(uint8_t* rdram, int32_t only_thread_id, std::size_t max_dispatches);
 void goldeneye_runtime_print_thread_records();
 
