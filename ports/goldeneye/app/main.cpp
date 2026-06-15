@@ -279,6 +279,6 @@ int main() {
     maybe_run_guarded_entrypoint(rdram);
 
     std::printf("controlled_probe_result=OK boot_primitives_enabled safe_generated_dispatch_enabled\n");
-    std::printf("next_runtime_blocker=host renderer shim scans generated display-list tasks and returns scheduler done messages; segmented display-list resolver plus RT64 backend integration is the next runtime layer\n");
+    std::printf("next_runtime_blocker=host renderer resolves first segmented branch display-lists; recursive display-list traversal plus RT64/custom presentation is the next runtime layer\n");
     return 0;
 }

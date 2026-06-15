@@ -13,16 +13,16 @@ This is **not** an emulator frontend, and the repo does **not** ship game files.
 | Runtime memory | Sparse 4 GiB+ host address space mirrors N64Recomp low-address aliasing for `0x700...`, `0x7F...`, and KSEG0 access patterns. |
 | Boot path | Guarded execution reaches `recomp_entrypoint -> boot bridge -> generated init -> generated mainproc`. |
 | Runtime primitives | First-pass ROM DMA, message queues, cooperative thread records, VI framebuffer bookkeeping, timing helpers, and guarded probes are implemented. |
-| Current blocker | Guarded `mainproc` now clears `guPerspectiveF`, advances through host-simulated frame ticks, consumes generated RSP/display-list tasks, and delivers scheduler done messages back to the game loop. |
+| Current blocker | Guarded `mainproc` now clears `guPerspectiveF`, advances through host-simulated frame ticks, consumes generated RSP/display-list tasks, resolves the first segmented branch display-list references, and delivers scheduler done messages back to the game loop. |
 
 Latest verified normal probe:
 
 ```text
 controlled_probe_result=OK boot_primitives_enabled safe_generated_dispatch_enabled
-next_runtime_blocker=host renderer shim scans generated display-list tasks and returns scheduler done messages; segmented display-list resolver plus RT64 backend integration is the next runtime layer
+next_runtime_blocker=host renderer resolves first segmented branch display-lists; recursive display-list traversal plus RT64/custom presentation is the next runtime layer
 ```
 
-The game does **not** boot yet. The next milestone is resolving the segmented display-list addresses used by the generated task, then wiring those parsed command streams into RT64 or a custom presentation layer.
+The game does **not** boot yet. The next milestone is recursively walking resolved branch display-lists and wiring those parsed command streams into RT64 or a custom presentation layer.
 
 ## Legal boundary
 
@@ -106,7 +106,7 @@ The guarded probe forks a child process, installs signal diagnostics, and uses a
 - Probe contexts now initialize the N64Recomp odd-FPR pointer (`f_odd`) for MIPS3 float mode, which clears the previous `guPerspectiveF` crash.
 - Scheduler message reads can synthesize retrace messages for blocking waits, and `waitForNextFrame` is now a deterministic host frame tick that updates the original frame-counter globals.
 - Debug registry, early audio, memory-pool resizing, and generic compressed-asset expansion are probe-only placeholders so the guarded path can advance to the next major runtime seam.
-- The host renderer shim now scans generated display-list tasks (`host_renderer_execute`), reports branch display-lists / segmented references / RDP-command counts, queues `OS_SC_DONE_MSG` back into `gfxFrameMsgQ`, and stops after a bounded number of delivered done messages. Scheduler, video, audio, input, and controller behavior are still skeletal runtime replacements.
+- The host renderer shim now scans generated display-list tasks (`host_renderer_execute`), resolves the first `gSPSegment` / branch-display-list references (`resolved_segmented_refs=3`, `unresolved_refs=0` for the first bounded task), previews the first command at each branch target, queues `OS_SC_DONE_MSG` back into `gfxFrameMsgQ`, and stops after a bounded number of delivered done messages. Recursive display-list traversal, RT64/custom presentation, scheduler, video, audio, input, and controller behavior are still skeletal runtime replacements.
 
 ## Documentation
 

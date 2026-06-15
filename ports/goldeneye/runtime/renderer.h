@@ -12,11 +12,15 @@ struct GoldenEyeRendererTaskResult {
     uint32_t commands_scanned{};
     uint32_t branch_display_lists{};
     uint32_t segmented_references{};
+    uint32_t resolved_segmented_references{};
     uint32_t unresolved_references{};
     uint32_t rdp_commands{};
+    uint32_t branch_commands_scanned{};
     bool command_limit_hit{};
     std::array<uint64_t, 4> first_commands{};
     std::size_t first_command_count{};
+    std::array<uint64_t, 4> branch_first_commands{};
+    std::size_t branch_first_command_count{};
 };
 
 GoldenEyeRendererTaskResult goldeneye_renderer_execute_display_list_task(
