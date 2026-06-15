@@ -13,16 +13,16 @@ This is **not** an emulator frontend, and the repo does **not** ship game files.
 | Runtime memory | Sparse 4 GiB+ host address space mirrors N64Recomp low-address aliasing for `0x700...`, `0x7F...`, and KSEG0 access patterns. |
 | Boot path | Guarded execution reaches `recomp_entrypoint -> boot bridge -> generated init -> generated mainproc`. |
 | Runtime primitives | First-pass ROM DMA, message queues, cooperative thread records, VI framebuffer bookkeeping, timing helpers, and guarded probes are implemented. |
-| Current blocker | Guarded `mainproc` now clears `guPerspectiveF`, advances through host-simulated frame ticks, consumes generated RSP/display-list tasks, resolves the first segmented branch display-list references, and delivers scheduler done messages back to the game loop. |
+| Current blocker | Guarded `mainproc` now clears `guPerspectiveF`, advances through host-simulated frame ticks, consumes generated RSP/display-list tasks, recursively walks the first bounded display-list task, and delivers scheduler done messages back to the game loop. |
 
 Latest verified normal probe:
 
 ```text
 controlled_probe_result=OK boot_primitives_enabled safe_generated_dispatch_enabled
-next_runtime_blocker=host renderer resolves first segmented branch display-lists; recursive display-list traversal plus RT64/custom presentation is the next runtime layer
+next_runtime_blocker=recursive host renderer walker is bounded and resolving first task; backend presentation plus deeper runtime correctness is the next layer
 ```
 
-The game does **not** boot yet. The next milestone is recursively walking resolved branch display-lists and wiring those parsed command streams into RT64 or a custom presentation layer.
+The game does **not** boot yet. The next milestone is turning the bounded recursive walker into a real presentation path: map the parsed F3DEX/RDP command stream into RT64 or a custom renderer, while tightening the remaining runtime placeholders behind the generated game loop.
 
 ## Legal boundary
 
@@ -96,7 +96,7 @@ Optional guarded boot/main-thread probe:
 GOLDENEYE_TRY_ENTRYPOINT=1 GOLDENEYE_ENTRYPOINT_TIMEOUT_SEC=20 ports/goldeneye/build-native-spike/goldeneye_native_spike
 ```
 
-The guarded probe forks a child process, installs signal diagnostics, and uses an alarm so deeper generated-code execution cannot make the normal verification path unsafe. `GOLDENEYE_FRAME_TICK_LIMIT` can cap successful host-simulated frame ticks during runtime experiments. `GOLDENEYE_RSP_TASK_LIMIT=N` controls how many generated display-list tasks the host shim consumes before stopping; default is `1`. `GOLDENEYE_CONTINUE_AFTER_RSP_TASK=1` disables that stop, but that path is intentionally not the default because the host renderer is still skeletal.
+The guarded probe forks a child process, installs signal diagnostics, and uses an alarm so deeper generated-code execution cannot make the normal verification path unsafe. `GOLDENEYE_FRAME_TICK_LIMIT` can cap successful host-simulated frame ticks during runtime experiments. `GOLDENEYE_RSP_TASK_LIMIT=N` controls how many generated display-list tasks the host shim consumes before stopping; default is `1`. `GOLDENEYE_RENDERER_COMMAND_LIMIT`, `GOLDENEYE_RENDERER_LIST_COMMAND_LIMIT`, and `GOLDENEYE_RENDERER_DEPTH_LIMIT` bound recursive display-list walking. `GOLDENEYE_CONTINUE_AFTER_RSP_TASK=1` disables the RSP done-message stop, but that path is intentionally not the default because the host renderer is still skeletal.
 
 ## Current technical notes
 
@@ -106,7 +106,7 @@ The guarded probe forks a child process, installs signal diagnostics, and uses a
 - Probe contexts now initialize the N64Recomp odd-FPR pointer (`f_odd`) for MIPS3 float mode, which clears the previous `guPerspectiveF` crash.
 - Scheduler message reads can synthesize retrace messages for blocking waits, and `waitForNextFrame` is now a deterministic host frame tick that updates the original frame-counter globals.
 - Debug registry, early audio, memory-pool resizing, and generic compressed-asset expansion are probe-only placeholders so the guarded path can advance to the next major runtime seam.
-- The host renderer shim now scans generated display-list tasks (`host_renderer_execute`), resolves the first `gSPSegment` / branch-display-list references (`resolved_segmented_refs=3`, `unresolved_refs=0` for the first bounded task), previews the first command at each branch target, queues `OS_SC_DONE_MSG` back into `gfxFrameMsgQ`, and stops after a bounded number of delivered done messages. Recursive display-list traversal, RT64/custom presentation, scheduler, video, audio, input, and controller behavior are still skeletal runtime replacements.
+- The host renderer shim now recursively walks generated display-list tasks (`host_renderer_execute`) with bounded command/list/depth limits. The latest guarded first task scans `2236` commands across `4` display lists, reaches depth `1`, resolves all `3` segmented branch-list references, sees `520` RDP-style commands, hits no command/list/depth guard, queues `OS_SC_DONE_MSG` back into `gfxFrameMsgQ`, and stops after the bounded done message. RT64/custom presentation, scheduler, video, audio, input, and controller behavior are still skeletal runtime replacements.
 
 ## Documentation
 

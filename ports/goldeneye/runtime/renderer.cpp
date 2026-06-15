@@ -1,8 +1,9 @@
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <limits>
+#include <vector>
 
 #include "runtime.h"
 #include "renderer.h"
@@ -10,22 +11,40 @@
 namespace {
 
 constexpr uint32_t kGbiBranchDl = 0x06u;
+constexpr uint32_t kGbiEndDisplayList = 0xB8u;
 constexpr uint32_t kGbiMoveWord = 0xBCu;
 constexpr uint32_t kGbiMoveWordSegment = 0x06u;
 constexpr uint32_t kMinimumCommandBytes = 8u;
 constexpr std::size_t kSegmentCount = 16;
 
-uint32_t renderer_command_limit() {
-    const char* value = std::getenv("GOLDENEYE_RENDERER_COMMAND_LIMIT");
+struct BranchTarget {
+    uint32_t vaddr{};
+    std::array<uint32_t, kSegmentCount> segments{};
+};
+
+uint32_t parse_env_u32(const char* name, uint32_t fallback, uint32_t min_value, uint32_t max_value) {
+    const char* value = std::getenv(name);
     if (value == nullptr || value[0] == '\0') {
-        return 512;
+        return fallback;
     }
     char* end = nullptr;
     const unsigned long parsed = std::strtoul(value, &end, 10);
-    if (end == value || parsed < 16 || parsed > 8192) {
-        return 512;
+    if (end == value || parsed < min_value || parsed > max_value) {
+        return fallback;
     }
     return static_cast<uint32_t>(parsed);
+}
+
+uint32_t renderer_command_limit() {
+    return parse_env_u32("GOLDENEYE_RENDERER_COMMAND_LIMIT", 8192, 16, 262144);
+}
+
+uint32_t renderer_list_command_limit() {
+    return parse_env_u32("GOLDENEYE_RENDERER_LIST_COMMAND_LIMIT", 1024, 16, 65536);
+}
+
+uint32_t renderer_depth_limit() {
+    return parse_env_u32("GOLDENEYE_RENDERER_DEPTH_LIMIT", 8, 1, 64);
 }
 
 bool read_u32(uint8_t* rdram, uint32_t vaddr, uint32_t* out) {
@@ -93,6 +112,147 @@ bool read_command(uint8_t* rdram, uint32_t command_addr, uint32_t* w0, uint32_t*
         && read_u32(rdram, command_addr + 4u, w1);
 }
 
+void record_command_preview(GoldenEyeRendererTaskResult& result, uint64_t command, bool top_level) {
+    if (top_level) {
+        if (result.first_command_count < result.first_commands.size()) {
+            result.first_commands[result.first_command_count++] = command;
+        }
+        return;
+    }
+
+    if (result.branch_first_command_count < result.branch_first_commands.size()) {
+        result.branch_first_commands[result.branch_first_command_count++] = command;
+    }
+}
+
+bool stack_contains(const std::vector<uint32_t>& stack, uint32_t vaddr) {
+    return std::find(stack.begin(), stack.end(), vaddr) != stack.end();
+}
+
+void scan_display_list(
+    uint8_t* rdram,
+    uint32_t list_start,
+    uint32_t list_end,
+    uint32_t depth,
+    const uint32_t depth_limit,
+    const uint32_t command_limit,
+    const uint32_t list_command_limit,
+    std::array<uint32_t, kSegmentCount> segments,
+    std::vector<uint32_t>& recursion_stack,
+    GoldenEyeRendererTaskResult& result) {
+
+    if (result.command_limit_hit || result.depth_limit_hit) {
+        return;
+    }
+    if (depth > depth_limit) {
+        result.depth_limit_hit = true;
+        return;
+    }
+    if (!can_translate_u64_command(rdram, list_start)) {
+        result.unresolved_references++;
+        return;
+    }
+    if (stack_contains(recursion_stack, list_start)) {
+        result.cycle_references++;
+        return;
+    }
+
+    recursion_stack.push_back(list_start);
+    result.display_lists_scanned++;
+    result.max_depth_reached = std::max(result.max_depth_reached, depth);
+
+    std::vector<BranchTarget> branch_targets;
+    branch_targets.reserve(8);
+
+    uint32_t command_addr = list_start;
+    uint32_t commands_in_list = 0;
+    const bool has_known_end = list_end > list_start;
+
+    while (!result.command_limit_hit && !result.depth_limit_hit) {
+        if (result.commands_scanned >= command_limit) {
+            result.command_limit_hit = true;
+            break;
+        }
+        if (commands_in_list >= list_command_limit) {
+            result.list_limit_hit = true;
+            break;
+        }
+        if (has_known_end && command_addr >= list_end) {
+            break;
+        }
+
+        uint32_t w0 = 0;
+        uint32_t w1 = 0;
+        if (!read_command(rdram, command_addr, &w0, &w1)) {
+            result.unresolved_references++;
+            break;
+        }
+
+        const uint64_t command = (static_cast<uint64_t>(w0) << 32) | static_cast<uint64_t>(w1);
+        record_command_preview(result, command, depth == 0 && commands_in_list < 4);
+
+        const uint32_t opcode = w0 >> 24;
+        decode_segment_move_word(w0, w1, segments);
+
+        result.commands_scanned++;
+        if (depth > 0) {
+            result.branch_commands_scanned++;
+        }
+        if (is_rdp_opcode(opcode)) {
+            result.rdp_commands++;
+        }
+        if (opcode == kGbiEndDisplayList) {
+            result.enddl_commands++;
+            break;
+        }
+
+        if (opcode == kGbiBranchDl) {
+            result.branch_display_lists++;
+            uint32_t branch_vaddr = w1;
+            bool resolved = true;
+            if (is_segmented_address(w1)) {
+                result.segmented_references++;
+                resolved = resolve_segmented_address(w1, segments, &branch_vaddr);
+                if (resolved) {
+                    result.resolved_segmented_references++;
+                }
+            }
+
+            if (!resolved || !can_translate_u64_command(rdram, branch_vaddr)) {
+                result.unresolved_references++;
+            } else if (stack_contains(recursion_stack, branch_vaddr)) {
+                result.cycle_references++;
+            } else if (depth + 1 > depth_limit) {
+                result.depth_limit_hit = true;
+            } else {
+                branch_targets.push_back(BranchTarget{branch_vaddr, segments});
+            }
+        }
+
+        command_addr += kMinimumCommandBytes;
+        commands_in_list++;
+    }
+
+    for (const BranchTarget& target : branch_targets) {
+        if (result.command_limit_hit || result.depth_limit_hit) {
+            break;
+        }
+        scan_display_list(
+            rdram,
+            target.vaddr,
+            0,
+            depth + 1,
+            depth_limit,
+            command_limit,
+            list_command_limit,
+            target.segments,
+            recursion_stack,
+            result);
+    }
+
+    recursion_stack.pop_back();
+}
+
 } // namespace
 
 GoldenEyeRendererTaskResult goldeneye_renderer_execute_display_list_task(
@@ -105,89 +265,46 @@ GoldenEyeRendererTaskResult goldeneye_renderer_execute_display_list_task(
     result.dlist_bytes = end_gdl >= first_gdl ? end_gdl - first_gdl : 0;
     result.top_level_commands = result.dlist_bytes / kMinimumCommandBytes;
 
-    const uint32_t limit = renderer_command_limit();
-    const uint32_t scan_commands = std::min(result.top_level_commands, limit);
-    if (result.top_level_commands > limit) {
-        result.command_limit_hit = true;
-    }
-
     std::array<uint32_t, kSegmentCount> segments{};
+    std::vector<uint32_t> recursion_stack;
+    recursion_stack.reserve(renderer_depth_limit() + 1u);
 
-    for (uint32_t index = 0; index < scan_commands; ++index) {
-        const uint32_t command_addr = first_gdl + index * kMinimumCommandBytes;
-
-        uint32_t w0 = 0;
-        uint32_t w1 = 0;
-        if (!read_command(rdram, command_addr, &w0, &w1)) {
-            result.unresolved_references++;
-            break;
-        }
-
-        decode_segment_move_word(w0, w1, segments);
-
-        if (result.first_command_count < result.first_commands.size()) {
-            result.first_commands[result.first_command_count++] =
-                (static_cast<uint64_t>(w0) << 32) | static_cast<uint64_t>(w1);
-        }
-
-        const uint32_t opcode = w0 >> 24;
-        if (opcode == kGbiBranchDl) {
-            result.branch_display_lists++;
-            uint32_t branch_vaddr = w1;
-            if (is_segmented_address(w1)) {
-                result.segmented_references++;
-                if (resolve_segmented_address(w1, segments, &branch_vaddr)
-                    && can_translate_u64_command(rdram, branch_vaddr)) {
-                    result.resolved_segmented_references++;
-                } else {
-                    result.unresolved_references++;
-                    result.commands_scanned++;
-                    continue;
-                }
-            } else if (!can_translate_u64_command(rdram, w1)) {
-                result.unresolved_references++;
-                result.commands_scanned++;
-                continue;
-            }
-
-            uint32_t branch_w0 = 0;
-            uint32_t branch_w1 = 0;
-            if (read_command(rdram, branch_vaddr, &branch_w0, &branch_w1)) {
-                result.branch_commands_scanned++;
-                if (result.branch_first_command_count < result.branch_first_commands.size()) {
-                    result.branch_first_commands[result.branch_first_command_count++] =
-                        (static_cast<uint64_t>(branch_w0) << 32) | static_cast<uint64_t>(branch_w1);
-                }
-            } else {
-                result.unresolved_references++;
-            }
-        }
-
-        if (is_rdp_opcode(opcode)) {
-            result.rdp_commands++;
-        }
-
-        result.commands_scanned++;
-    }
+    scan_display_list(
+        rdram,
+        first_gdl,
+        end_gdl,
+        0,
+        renderer_depth_limit(),
+        renderer_command_limit(),
+        renderer_list_command_limit(),
+        segments,
+        recursion_stack,
+        result);
 
     return result;
 }
 
 void goldeneye_renderer_print_task_result(const GoldenEyeRendererTaskResult& result) {
     std::printf(
-        "host_renderer_execute first_gdl=0x%08X end_gdl=0x%08X bytes=0x%X top_commands=%u scanned=%u branch_dl=%u segmented_refs=%u resolved_segmented_refs=%u unresolved_refs=%u branch_scanned=%u rdp_commands=%u limit_hit=%d\n",
+        "host_renderer_execute first_gdl=0x%08X end_gdl=0x%08X bytes=0x%X top_commands=%u scanned=%u lists=%u max_depth=%u branch_dl=%u segmented_refs=%u resolved_segmented_refs=%u unresolved_refs=%u branch_scanned=%u rdp_commands=%u enddl=%u cycles=%u limit_hit=%d list_limit_hit=%d depth_limit_hit=%d\n",
         result.first_gdl,
         result.end_gdl,
         result.dlist_bytes,
         result.top_level_commands,
         result.commands_scanned,
+        result.display_lists_scanned,
+        result.max_depth_reached,
         result.branch_display_lists,
         result.segmented_references,
         result.resolved_segmented_references,
         result.unresolved_references,
         result.branch_commands_scanned,
         result.rdp_commands,
-        result.command_limit_hit ? 1 : 0);
+        result.enddl_commands,
+        result.cycle_references,
+        result.command_limit_hit ? 1 : 0,
+        result.list_limit_hit ? 1 : 0,
+        result.depth_limit_hit ? 1 : 0);
 
     for (std::size_t i = 0; i < result.first_command_count; ++i) {
         std::printf("  host_renderer_dlist[%zu]=0x%08X_%08X\n",

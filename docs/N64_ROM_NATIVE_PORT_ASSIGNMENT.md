@@ -275,7 +275,7 @@ probe return_null -> OK r2=0x0000000000000000 sp=0xFFFFFFFF807FF000
 runtime_primitives: rom_bytes=12582912 dma_copies=6 dma_bytes=1146464 queues_created=1 messages_sent=2 messages_received=1 threads_created=1 threads_started=1 threads_dispatched=0 rsp_tasks_started=0 rsp_done_messages_delivered=0
 entrypoint_probe=skipped set GOLDENEYE_TRY_ENTRYPOINT=1 to attempt guarded child process
 controlled_probe_result=OK boot_primitives_enabled safe_generated_dispatch_enabled
-next_runtime_blocker=host renderer resolves first segmented branch display-lists; recursive display-list traversal plus RT64/custom presentation is the next runtime layer
+next_runtime_blocker=recursive host renderer walker is bounded and resolving first task; backend presentation plus deeper runtime correctness is the next layer
 ```
 
 Guarded entrypoint/main-thread probe:
@@ -290,14 +290,19 @@ thread_dispatch id=3 entry=0x7000089C stack=0x803B3948 priority=10 dispatch=ENAB
 host_frame_tick count=1 delta=1 currentFrameCounter=1 os_count=0x000BD6C3
 host_frame_tick count=2 delta=1 currentFrameCounter=2 os_count=0x0017AD86
 host_rsp_task_consume count=1 first_gdl=0x8011B320 end_gdl=0x8011BC98 flags=0x00000000 done_msg=0x803B38EC frame_ticks=2
-host_renderer_execute first_gdl=0x8011B320 end_gdl=0x8011BC98 bytes=0x978 top_commands=303 scanned=303 branch_dl=3 segmented_refs=3 resolved_segmented_refs=3 unresolved_refs=0 branch_scanned=3 rdp_commands=277 limit_hit=0
+host_renderer_execute first_gdl=0x8011B320 end_gdl=0x8011BC98 bytes=0x978 top_commands=303 scanned=2236 lists=4 max_depth=1 branch_dl=15 segmented_refs=3 resolved_segmented_refs=3 unresolved_refs=12 branch_scanned=1933 rdp_commands=520 enddl=4 cycles=0 limit_hit=0 list_limit_hit=0 depth_limit_hit=0
 host_renderer_dlist[0]=0xBC000006_00000000
 host_renderer_dlist[1]=0xBC000406_00100000
 host_renderer_dlist[2]=0x06000000_01000040
 host_renderer_dlist[3]=0x06000000_01000020
-host_renderer_branch_dlist[0]=0x021400BA_00000000
-host_renderer_branch_dlist[1]=0x000000B6_04321F00
-host_renderer_branch_dlist[2]=0x000000E7_00000000
+host_renderer_branch_dlist[0]=0xBC000404_00000002
+host_renderer_branch_dlist[1]=0xBC000C04_00000002
+host_renderer_branch_dlist[2]=0xBC001404_0000FFFE
+host_renderer_branch_dlist[3]=0xBC001C04_0000FFFE
+host_renderer_branch_dlist[4]=0xE7000000_00000000
+host_renderer_branch_dlist[5]=0xFE000000_80142440
+host_renderer_branch_dlist[6]=0xE7000000_00000000
+host_renderer_branch_dlist[7]=0xB900031D_00000000
 host_rsp_task_done_queued count=1 queue=0x8005D9A0 msg=0x803B38EC type=2 queued=1 limit=1
 host_rsp_task_done_delivered queue=0x8005D9A0 msg=0x803B38EC type=2 limit=1
 host_rsp_task_consume_limit reached delivered=1; set GOLDENEYE_CONTINUE_AFTER_RSP_TASK=1 or GOLDENEYE_RSP_TASK_LIMIT=N to continue
@@ -308,7 +313,7 @@ The produced local binary is ignored and not committed:
 
 ```text
 ports/goldeneye/build-native-spike/goldeneye_native_spike
-SHA256 135bbb9f4b2858d1a22fcc37ec38c0de2260819f46b07ba41e8fbccf20878735
+SHA256 6f79da0862f6afdb3da3bbe6f4ef9ffe7b3a6da8d78ab07e37de39a19adbd173
 ```
 
 This now proves:
@@ -317,7 +322,7 @@ This now proves:
 2. the harness reserves a sparse host address space that matches N64Recomp low-address aliasing and maps the direct `0x80000400` section plus low-address `0x700...` / `0x7F...` sections into host memory;
 3. the compressed cdata block is preloaded at `_csegmentSegmentStart`, allowing generated `init` to execute; the guarded child restores the local-only decomp ELF `.csegment` at the `initTLBPrepareContext` seam while generated inflate/TLB behavior remains incomplete;
 4. first-pass ROM DMA, message queue, cooperative thread, VI framebuffer, and timing primitives execute in the host runtime;
-5. guarded `recomp_entrypoint` dispatch is isolated in a child process and now progresses through `recomp_entrypoint -> boot bridge -> generated init -> generated mainproc`, dispatching recorded thread id `3` past the debug registry and early audio/asset placeholders, through `guPerspectiveF`, through host frame ticks, and into a host renderer shim that resolves the first segmented branch-display-list references before delivering scheduler done messages back to `gfxFrameMsgQ`. Probe contexts initialize N64Recomp's odd-FPR pointer (`f_odd`) for MIPS3 float mode; without that, generated `guPerspectiveF` faulted while writing odd float registers.
+5. guarded `recomp_entrypoint` dispatch is isolated in a child process and now progresses through `recomp_entrypoint -> boot bridge -> generated init -> generated mainproc`, dispatching recorded thread id `3` past the debug registry and early audio/asset placeholders, through `guPerspectiveF`, through host frame ticks, and into a host renderer shim that recursively walks the first bounded display-list task before delivering scheduler done messages back to `gfxFrameMsgQ`. Probe contexts initialize N64Recomp's odd-FPR pointer (`f_odd`) for MIPS3 float mode; without that, generated `guPerspectiveF` faulted while writing odd float registers.
 
-It does **not** boot the game yet. The next blocker is recursive display-list traversal and backend presentation: the first bounded generated task now resolves its three segmented branch-display-list addresses (`resolved_segmented_refs=3`, `unresolved_refs=0`) and previews branch targets, but the runtime still needs a proper recursive walker plus RT64 or custom presentation layer.
+It does **not** boot the game yet. The next blocker is backend presentation plus deeper runtime correctness: the first bounded generated task now scans `2236` commands across `4` display lists, resolves all three segmented branch-display-list addresses, previews branch commands, hits no command/list/depth guard, and delivers the scheduler done message, but the runtime still needs F3DEX/RDP command mapping into RT64 or a custom renderer and stricter replacement of the remaining scheduler/video/audio/input placeholders.
 
