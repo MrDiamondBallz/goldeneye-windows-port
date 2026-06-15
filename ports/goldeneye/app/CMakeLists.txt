@@ -49,6 +49,7 @@ target_compile_definitions(goldeneye_recomp_generated PRIVATE
 
 add_library(goldeneye_runtime STATIC
   "${CMAKE_CURRENT_LIST_DIR}/../runtime/runtime.cpp"
+  "${CMAKE_CURRENT_LIST_DIR}/../runtime/renderer.cpp"
   "${CMAKE_CURRENT_LIST_DIR}/../runtime/stubs.cpp"
   "${CMAKE_CURRENT_LIST_DIR}/../runtime/libultra_stubs.cpp"
 )

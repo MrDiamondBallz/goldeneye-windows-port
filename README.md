@@ -19,10 +19,10 @@ Latest verified normal probe:
 
 ```text
 controlled_probe_result=OK boot_primitives_enabled safe_generated_dispatch_enabled
-next_runtime_blocker=guarded render path consumes RSP/display-list tasks and delivers scheduler done messages; host renderer/RT64 task execution is the next runtime layer
+next_runtime_blocker=host renderer shim scans generated display-list tasks and returns scheduler done messages; segmented display-list resolver plus RT64 backend integration is the next runtime layer
 ```
 
-The game does **not** boot yet. The next milestone is real native renderer execution: hand the consumed RSP/display-list task to RT64 or a custom presentation layer instead of treating the task as instantly complete.
+The game does **not** boot yet. The next milestone is resolving the segmented display-list addresses used by the generated task, then wiring those parsed command streams into RT64 or a custom presentation layer.
 
 ## Legal boundary
 
@@ -106,7 +106,7 @@ The guarded probe forks a child process, installs signal diagnostics, and uses a
 - Probe contexts now initialize the N64Recomp odd-FPR pointer (`f_odd`) for MIPS3 float mode, which clears the previous `guPerspectiveF` crash.
 - Scheduler message reads can synthesize retrace messages for blocking waits, and `waitForNextFrame` is now a deterministic host frame tick that updates the original frame-counter globals.
 - Debug registry, early audio, memory-pool resizing, and generic compressed-asset expansion are probe-only placeholders so the guarded path can advance to the next major runtime seam.
-- The host shim now consumes generated RSP/display-list tasks (`host_rsp_task_consume`), previews display-list commands, queues `OS_SC_DONE_MSG` back into `gfxFrameMsgQ`, and stops after a bounded number of delivered done messages. Scheduler, video, audio, input, and controller behavior are still skeletal runtime replacements.
+- The host renderer shim now scans generated display-list tasks (`host_renderer_execute`), reports branch display-lists / segmented references / RDP-command counts, queues `OS_SC_DONE_MSG` back into `gfxFrameMsgQ`, and stops after a bounded number of delivered done messages. Scheduler, video, audio, input, and controller behavior are still skeletal runtime replacements.
 
 ## Documentation
 
