@@ -275,13 +275,13 @@ probe return_null -> OK r2=0x0000000000000000 sp=0xFFFFFFFF807FF000
 runtime_primitives: rom_bytes=12582912 dma_copies=6 dma_bytes=1146464 queues_created=1 messages_sent=2 messages_received=1 threads_created=1 threads_started=1 threads_dispatched=0
 entrypoint_probe=skipped set GOLDENEYE_TRY_ENTRYPOINT=1 to attempt guarded child process
 controlled_probe_result=OK boot_primitives_enabled safe_generated_dispatch_enabled
-next_runtime_blocker=guarded render path clears guPerspectiveF and reaches three host frame ticks; unbounded probe then stalls in runtime address-translation hot loop
+next_runtime_blocker=guarded render path reaches first RSP/display-list task boundary; host renderer/scheduler handoff is the next runtime layer
 ```
 
 Guarded entrypoint/main-thread probe:
 
 ```text
-GOLDENEYE_TRY_ENTRYPOINT=1 GOLDENEYE_ENTRYPOINT_TIMEOUT_SEC=20 GOLDENEYE_FRAME_TICK_LIMIT=3 ports/goldeneye/build-native-spike/goldeneye_native_spike
+GOLDENEYE_TRY_ENTRYPOINT=1 GOLDENEYE_ENTRYPOINT_TIMEOUT_SEC=20 ports/goldeneye/build-native-spike/goldeneye_native_spike
 runtime replacement stub called: initTLBPrepareContext
 entrypoint_child=returned r2=0x0000000000000000 sp=0xFFFFFFFF803AB410
 post_init_probe g_Textures[0]=0x54070000 g_Textures[1]=0x6A010000
@@ -289,21 +289,16 @@ thread_records count=2
 thread_dispatch id=3 entry=0x7000089C stack=0x803B3948 priority=10 dispatch=ENABLED
 host_frame_tick count=1 delta=1 currentFrameCounter=1 os_count=0x000BD6C3
 host_frame_tick count=2 delta=1 currentFrameCounter=2 os_count=0x0017AD86
-host_frame_tick count=3 delta=1 currentFrameCounter=3 os_count=0x00238449
-entrypoint_probe=attempted child_exit=150
-host_frame_tick_limit reached count=3 currentFrameCounter=3
-
-Unbounded guarded probe:
-entrypoint_probe=attempted child_exit=142
-entrypoint_child_signal signal=14 ...
-addr2line: goldeneye_runtime_translate at runtime/runtime.cpp:168
+host_rsp_task_start count=1 first_gdl=0x8011B320 end_gdl=0x8011BC98 flags=0x00000000 done_msg=0x803B38EC frame_ticks=2
+host_rsp_task_boundary reached count=1; set GOLDENEYE_CONTINUE_AFTER_RSP_TASK=1 to continue into skeletal scheduler/renderer
+entrypoint_probe=attempted child_exit=151
 ```
 
 The produced local binary is ignored and not committed:
 
 ```text
 ports/goldeneye/build-native-spike/goldeneye_native_spike
-SHA256 820ed6d128c89220c65dc30bcb83efb23b4a47d84f9cda69ddb174ae97151b8f
+SHA256 c397b6fa9fe6d60a8d43f0cfc1c8098edf87918a8b9551691a0341411717dec1
 ```
 
 This now proves:
@@ -312,7 +307,7 @@ This now proves:
 2. the harness reserves a sparse host address space that matches N64Recomp low-address aliasing and maps the direct `0x80000400` section plus low-address `0x700...` / `0x7F...` sections into host memory;
 3. the compressed cdata block is preloaded at `_csegmentSegmentStart`, allowing generated `init` to execute; the guarded child restores the local-only decomp ELF `.csegment` at the `initTLBPrepareContext` seam while generated inflate/TLB behavior remains incomplete;
 4. first-pass ROM DMA, message queue, cooperative thread, VI framebuffer, and timing primitives execute in the host runtime;
-5. guarded `recomp_entrypoint` dispatch is isolated in a child process and now progresses through `recomp_entrypoint -> boot bridge -> generated init -> generated mainproc`, dispatching recorded thread id `3` past the debug registry and early audio/asset placeholders, through `guPerspectiveF`, and through three deterministic host frame ticks. Probe contexts initialize N64Recomp's odd-FPR pointer (`f_odd`) for MIPS3 float mode; without that, generated `guPerspectiveF` faulted while writing odd float registers.
+5. guarded `recomp_entrypoint` dispatch is isolated in a child process and now progresses through `recomp_entrypoint -> boot bridge -> generated init -> generated mainproc`, dispatching recorded thread id `3` past the debug registry and early audio/asset placeholders, through `guPerspectiveF`, through host frame ticks, and to the first generated RSP/display-list task. Probe contexts initialize N64Recomp's odd-FPR pointer (`f_odd`) for MIPS3 float mode; without that, generated `guPerspectiveF` faulted while writing odd float registers.
 
-It does **not** boot the game yet. The next blocker is an unbounded scheduler/render hot loop dominated by runtime address translation after three frame ticks. The next real fix is to add structured loop diagnostics or a tighter native presentation/RSP-task boundary so the probe can identify the concrete render-runtime dependency instead of timing out.
+It does **not** boot the game yet. The next blocker is the native renderer/scheduler handoff: consume the first display-list task, surface useful RSP/RDP task metadata, and decide where RT64 or a custom host presentation layer takes ownership.
 

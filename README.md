@@ -13,16 +13,16 @@ This is **not** an emulator frontend, and the repo does **not** ship game files.
 | Runtime memory | Sparse 4 GiB+ host address space mirrors N64Recomp low-address aliasing for `0x700...`, `0x7F...`, and KSEG0 access patterns. |
 | Boot path | Guarded execution reaches `recomp_entrypoint -> boot bridge -> generated init -> generated mainproc`. |
 | Runtime primitives | First-pass ROM DMA, message queues, cooperative thread records, VI framebuffer bookkeeping, timing helpers, and guarded probes are implemented. |
-| Current blocker | Guarded `mainproc` now clears `guPerspectiveF`, reaches three host-simulated frame ticks, then an unbounded probe stalls in a runtime address-translation hot loop during scheduler/render progress. |
+| Current blocker | Guarded `mainproc` now clears `guPerspectiveF`, advances through host-simulated frame ticks, and stops at the first RSP/display-list task boundary. |
 
 Latest verified normal probe:
 
 ```text
 controlled_probe_result=OK boot_primitives_enabled safe_generated_dispatch_enabled
-next_runtime_blocker=guarded render path clears guPerspectiveF and reaches three host frame ticks; unbounded probe then stalls in runtime address-translation hot loop
+next_runtime_blocker=guarded render path reaches first RSP/display-list task boundary; host renderer/scheduler handoff is the next runtime layer
 ```
 
-The game does **not** boot yet. The next milestone is replacing the hot scheduler/render translation loop with structured diagnostics or a tighter native presentation/RSP-task boundary so the probe can identify the next concrete render-runtime dependency.
+The game does **not** boot yet. The next milestone is the native renderer/scheduler handoff: consume the first generated display-list task, surface useful RSP/RDP task metadata, and decide where RT64 or a custom host presentation layer takes ownership.
 
 ## Legal boundary
 
@@ -93,10 +93,10 @@ That script:
 Optional guarded boot/main-thread probe:
 
 ```bash
-GOLDENEYE_TRY_ENTRYPOINT=1 GOLDENEYE_ENTRYPOINT_TIMEOUT_SEC=20 GOLDENEYE_FRAME_TICK_LIMIT=3 ports/goldeneye/build-native-spike/goldeneye_native_spike
+GOLDENEYE_TRY_ENTRYPOINT=1 GOLDENEYE_ENTRYPOINT_TIMEOUT_SEC=20 ports/goldeneye/build-native-spike/goldeneye_native_spike
 ```
 
-The guarded probe forks a child process, installs signal diagnostics, and uses an alarm so deeper generated-code execution cannot make the normal verification path unsafe. `GOLDENEYE_FRAME_TICK_LIMIT` can cap successful host-simulated frame ticks during runtime experiments.
+The guarded probe forks a child process, installs signal diagnostics, and uses an alarm so deeper generated-code execution cannot make the normal verification path unsafe. `GOLDENEYE_FRAME_TICK_LIMIT` can cap successful host-simulated frame ticks during runtime experiments. `GOLDENEYE_CONTINUE_AFTER_RSP_TASK=1` opts past the first display-list task boundary, but that path is intentionally not the default because the host renderer/scheduler is still skeletal.
 
 ## Current technical notes
 
@@ -106,7 +106,7 @@ The guarded probe forks a child process, installs signal diagnostics, and uses a
 - Probe contexts now initialize the N64Recomp odd-FPR pointer (`f_odd`) for MIPS3 float mode, which clears the previous `guPerspectiveF` crash.
 - Scheduler message reads can synthesize retrace messages for blocking waits, and `waitForNextFrame` is now a deterministic host frame tick that updates the original frame-counter globals.
 - Debug registry, early audio, memory-pool resizing, and generic compressed-asset expansion are probe-only placeholders so the guarded path can advance to the next major runtime seam.
-- Scheduler, video, audio, input, and controller behavior are still skeletal runtime replacements; the current guarded boundary is a runtime address-translation hot loop after three frame ticks.
+- The first generated RSP/display-list task is now a structured guarded boundary (`host_rsp_task_start`) instead of an alarm-driven hot loop. Scheduler, video, audio, input, and controller behavior are still skeletal runtime replacements.
 
 ## Documentation
 

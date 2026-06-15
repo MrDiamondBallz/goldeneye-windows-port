@@ -64,6 +64,9 @@ ignored = [
     # Host frame pump: replace the generated busy-wait with a deterministic
     # frame tick so guarded probes can advance one or more frames safely.
     "waitForNextFrame",
+    # Native RSP/display-list boundary. Stop guarded probes here instead of
+    # burning CPU in the title loop until a host renderer/scheduler owns tasks.
+    "rspGfxTaskStart",
     # Mis-typed as FUNC in the decomp ELF but is a packed data table, not code.
     "eqpower",
 ]

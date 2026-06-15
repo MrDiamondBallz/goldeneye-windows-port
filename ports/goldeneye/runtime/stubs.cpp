@@ -18,6 +18,7 @@ static void replaced_runtime_stub(const char* name, uint8_t*, recomp_context* ct
 uint32_t g_host_memp_cursor = 0x80100000u;
 uint32_t g_host_frame_ticks = 0;
 uint32_t g_host_frame_os_count = 0;
+uint32_t g_host_rsp_tasks = 0;
 
 uint32_t align16(uint32_t value) {
     return (value + 0xFu) & ~0xFu;
@@ -50,6 +51,19 @@ uint32_t frame_tick_limit() {
         return 0;
     }
     return static_cast<uint32_t>(parsed);
+}
+
+bool continue_after_rsp_task_boundary() {
+    const char* value = std::getenv("GOLDENEYE_CONTINUE_AFTER_RSP_TASK");
+    return value != nullptr && value[0] != '\0' && value[0] != '0';
+}
+
+void write_runtime_half(uint8_t* rdram, uint32_t addr, int16_t value) {
+    uint8_t* ptr = nullptr;
+    if (!goldeneye_runtime_translate(rdram, addr, sizeof(int16_t), &ptr)) {
+        return;
+    }
+    MEM_H(0, S32(addr)) = value;
 }
 
 void sizepropdef(uint8_t* rdram, recomp_context* ctx) {
@@ -242,6 +256,43 @@ void waitForNextFrame(uint8_t* rdram, recomp_context* ctx) {
 
     if (ctx != nullptr) {
         ctx->r2 = 0;
+    }
+}
+
+void rspGfxTaskStart(uint8_t* rdram, recomp_context* ctx) {
+    if (ctx == nullptr) {
+        return;
+    }
+
+    constexpr int16_t kOsScDoneMsg = 2;
+    const uint32_t first_gdl = static_cast<uint32_t>(ctx->r4);
+    const uint32_t end_gdl = static_cast<uint32_t>(ctx->r5);
+    const uint32_t flags = static_cast<uint32_t>(ctx->r6);
+    const uint32_t done_msg = static_cast<uint32_t>(ctx->r7);
+
+    g_host_rsp_tasks++;
+    std::printf(
+        "host_rsp_task_start count=%u first_gdl=0x%08X end_gdl=0x%08X flags=0x%08X done_msg=0x%08X frame_ticks=%u\n",
+        g_host_rsp_tasks,
+        first_gdl,
+        end_gdl,
+        flags,
+        done_msg,
+        g_host_frame_ticks);
+    std::fflush(stdout);
+
+    if (done_msg != 0) {
+        write_runtime_half(rdram, done_msg, kOsScDoneMsg);
+    }
+
+    ctx->r2 = 0;
+
+    if (!continue_after_rsp_task_boundary()) {
+        std::fprintf(stderr,
+            "host_rsp_task_boundary reached count=%u; set GOLDENEYE_CONTINUE_AFTER_RSP_TASK=1 to continue into skeletal scheduler/renderer\n",
+            g_host_rsp_tasks);
+        std::fflush(stderr);
+        std::_Exit(151);
     }
 }
 

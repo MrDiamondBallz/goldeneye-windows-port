@@ -279,6 +279,6 @@ int main() {
     maybe_run_guarded_entrypoint(rdram);
 
     std::printf("controlled_probe_result=OK boot_primitives_enabled safe_generated_dispatch_enabled\n");
-    std::printf("next_runtime_blocker=guarded render path clears guPerspectiveF and reaches three host frame ticks; unbounded probe then stalls in runtime address-translation hot loop\n");
+    std::printf("next_runtime_blocker=guarded render path reaches first RSP/display-list task boundary; host renderer/scheduler handoff is the next runtime layer\n");
     return 0;
 }
