@@ -275,7 +275,7 @@ probe return_null -> OK r2=0x0000000000000000 sp=0xFFFFFFFF807FF000
 runtime_primitives: rom_bytes=12582912 dma_copies=6 dma_bytes=1146464 queues_created=1 messages_sent=2 messages_received=1 threads_created=1 threads_started=1 threads_dispatched=0 rsp_tasks_started=0 rsp_done_messages_delivered=0
 entrypoint_probe=skipped set GOLDENEYE_TRY_ENTRYPOINT=1 to attempt guarded child process
 controlled_probe_result=OK boot_primitives_enabled safe_generated_dispatch_enabled
-next_runtime_blocker=renderer validates backend resource addresses; next layer is RT64/custom command execution plus texture image provenance
+next_runtime_blocker=texture image stream is classified but still unbacked; next layer is real asset decompression/memp bank modeling before RT64/custom rendering
 ```
 
 Guarded entrypoint/main-thread probe:
@@ -291,8 +291,8 @@ host_frame_tick count=1 delta=1 currentFrameCounter=1 os_count=0x000BD6C3
 host_frame_tick count=2 delta=1 currentFrameCounter=2 os_count=0x0017AD86
 host_rsp_task_consume count=1 first_gdl=0x8011B320 end_gdl=0x8011BC98 flags=0x00000000 done_msg=0x803B38EC frame_ticks=2
 host_renderer_execute first_gdl=0x8011B320 end_gdl=0x8011BC98 bytes=0x978 top_commands=303 scanned=2236 lists=4 max_depth=1 branch_dl=15 segmented_refs=3 resolved_segmented_refs=3 unresolved_refs=12 branch_scanned=1933 rsp_commands=1716 rdp_commands=520 enddl=4 cycles=0 limit_hit=0 list_limit_hit=0 depth_limit_hit=0
-host_renderer_presentation matrix=29 vertex=14 texture=11 triangles=10 geom_mode=21 tex_images=16 tex_segmented=6 tex_resolved=0 tex_unresolved=16 color_images=20 depth_images=9 tile_setup=226 texture_loads=38 combine=14 sync=23 fill_rect=10 othermode=38 packets=58
-host_renderer_backend packets=479 geometry=53 state=84 texture=280 target=39 sync=23 address_refs=88 valid_refs=25 invalid_refs=63
+host_renderer_presentation matrix=29 vertex=14 texture=11 triangles=10 geom_mode=21 tex_images=10 tex_malformed=6 tex_segmented=2 tex_resolved=0 tex_unresolved=10 color_images=20 depth_images=9 tile_setup=226 texture_loads=38 combine=14 sync=23 fill_rect=10 othermode=38 packets=58
+host_renderer_backend packets=473 geometry=53 state=84 texture=274 target=39 sync=23 address_refs=82 valid_refs=25 invalid_refs=57
 host_renderer_opcode_histogram op00=154 opF5=114 op6C=112 opF2=112 op93=78 op20=40 op03=34 op01=29 op02=28 opBC=22 op40=20 opBA=20
 host_renderer_backend_packet[0]=pipe_sync op=0xE7 w0=0xE7000000 w1=0x00000000 resolved=0x00000000 valid=0
 host_renderer_backend_packet[1]=set_depth_image op=0xFE w0=0xFE000000 w1=0x80142440 resolved=0x80142440 valid=1
@@ -314,14 +314,14 @@ host_renderer_branch_dlist[4]=0xE7000000_00000000
 host_renderer_branch_dlist[5]=0xFE000000_80142440
 host_renderer_branch_dlist[6]=0xE7000000_00000000
 host_renderer_branch_dlist[7]=0xB900031D_00000000
-host_renderer_texture_image[0]=0x58080000
-host_renderer_texture_image[1]=0x8E020000
-host_renderer_texture_image[2]=0xFFC0EF07
-host_renderer_texture_image[3]=0x03822FC7
-host_renderer_texture_image[4]=0xBD08FD10
-host_renderer_texture_image[5]=0x83E67DF6
-host_renderer_texture_image[6]=0x06283040
-host_renderer_texture_image[7]=0x06CE2EDD
+host_renderer_texture_image[0]=cmd=0x8011B488 w0=0xFDD00000 w1=0x58080000 resolved=0x58080000 valid=0 segmented=0 segment=0 segment_base=0x00000000
+host_renderer_texture_image[1]=cmd=0x8011B880 w0=0xFDD00000 w1=0x8E020000 resolved=0x8E020000 valid=0 segmented=0 segment=0 segment_base=0x00000000
+host_renderer_texture_image[2]=cmd=0x801001A0 w0=0xFD5FE0FF w1=0xFFC0EF07 resolved=0xFFC0EF07 valid=0 segmented=0 segment=0 segment_base=0x00000000
+host_renderer_texture_image[3]=cmd=0x801001F0 w0=0xFDB83CCB w1=0x03822FC7 resolved=0x03822FC7 valid=0 segmented=1 segment=3 segment_base=0x00000000
+host_renderer_texture_image[4]=cmd=0x80100260 w0=0xFD203D21 w1=0xBD08FD10 resolved=0xBD08FD10 valid=0 segmented=0 segment=0 segment_base=0x00000000
+host_renderer_texture_image[5]=cmd=0x801002C8 w0=0xFD15FC15 w1=0x83E67DF6 resolved=0x83E67DF6 valid=0 segmented=0 segment=0 segment_base=0x00000000
+host_renderer_texture_image[6]=cmd=0x80100350 w0=0xFDE1F913 w1=0x06283040 resolved=0x06283040 valid=0 segmented=1 segment=6 segment_base=0x00000000
+host_renderer_texture_image[7]=cmd=0x80101050 w0=0xFD34BE74 w1=0x06CE2EDD resolved=0x06CE2EDD valid=0 segmented=1 segment=6 segment_base=0x00000000
 host_rsp_task_done_queued count=1 queue=0x8005D9A0 msg=0x803B38EC type=2 queued=1 limit=1
 host_rsp_task_done_delivered queue=0x8005D9A0 msg=0x803B38EC type=2 limit=1
 host_rsp_task_consume_limit reached delivered=1; set GOLDENEYE_CONTINUE_AFTER_RSP_TASK=1 or GOLDENEYE_RSP_TASK_LIMIT=N to continue
@@ -341,7 +341,7 @@ This now proves:
 2. the harness reserves a sparse host address space that matches N64Recomp low-address aliasing and maps the direct `0x80000400` section plus low-address `0x700...` / `0x7F...` sections into host memory;
 3. the compressed cdata block is preloaded at `_csegmentSegmentStart`, allowing generated `init` to execute; the guarded child restores the local-only decomp ELF `.csegment` at the `initTLBPrepareContext` seam while generated inflate/TLB behavior remains incomplete;
 4. first-pass ROM DMA, message queue, cooperative thread, VI framebuffer, and timing primitives execute in the host runtime;
-5. guarded `recomp_entrypoint` dispatch is isolated in a child process and now progresses through `recomp_entrypoint -> boot bridge -> generated init -> generated mainproc`, dispatching recorded thread id `3` past the debug registry and early audio/asset placeholders, through `guPerspectiveF`, through host frame ticks, and into a host renderer shim that recursively walks the first bounded display-list task, classifies presentation commands, prints a top-opcode histogram, validates backend resource addresses, emits named backend packet previews, previews texture image references, and then delivers scheduler done messages back to `gfxFrameMsgQ`. Probe contexts initialize N64Recomp's odd-FPR pointer (`f_odd`) for MIPS3 float mode; without that, generated `guPerspectiveF` faulted while writing odd float registers.
+5. guarded `recomp_entrypoint` dispatch is isolated in a child process and progresses through `recomp_entrypoint -> boot bridge -> generated init -> generated mainproc`, dispatching recorded thread id `3` past the debug registry and early audio/asset placeholders, through `guPerspectiveF`, through host frame ticks, and into a host renderer shim that recursively walks the first bounded display-list task, classifies presentation commands, prints a top-opcode histogram, validates backend resource addresses, emits named backend packet previews, previews texture image candidates with command addresses/raw words/segment state, and then delivers scheduler done messages back to `gfxFrameMsgQ`. Probe contexts initialize N64Recomp's odd-FPR pointer (`f_odd`) for MIPS3 float mode; without that, generated `guPerspectiveF` faulted while writing odd float registers.
 
-It does **not** boot the game yet. The next blocker is RT64/custom command execution plus texture-image provenance: the first bounded generated task now scans `2236` commands across `4` display lists, resolves all three segmented branch-display-list addresses, summarizes RSP/RDP work (`1716`/`520`), records `58` presentation packet candidates, emits named packet previews, validates `25` of `88` backend address-bearing refs, and delivers the scheduler done message; a two-task guarded probe (`GOLDENEYE_RSP_TASK_LIMIT=2`) advances through two scheduler-done cycles with the same renderer summary shape. The runtime still needs F3DEX/RDP command mapping into RT64 or a custom renderer, correct texture-image provenance, and stricter replacement of scheduler/video/audio/input placeholders.
+It does **not** boot the game yet. The next blocker is real asset decompression / memory-pool bank modeling before RT64/custom command execution: the first bounded generated task now scans `2236` commands across `4` display lists, resolves all three segmented branch-display-list addresses, summarizes RSP/RDP work (`1716`/`520`), records `58` presentation packet candidates, emits named packet previews, validates `25` of `82` backend address-bearing refs, separates `10` valid-format texture-image candidates from `6` malformed `0xFD` candidates, and delivers the scheduler done message; a two-task guarded probe (`GOLDENEYE_RSP_TASK_LIMIT=2`) advances through two scheduler-done cycles with the same renderer summary shape. The runtime still needs texture-image candidates to resolve to backed asset/memory addresses before F3DEX/RDP command mapping into RT64 or a custom renderer can produce meaningful output, plus stricter replacement of scheduler/video/audio/input placeholders.
 

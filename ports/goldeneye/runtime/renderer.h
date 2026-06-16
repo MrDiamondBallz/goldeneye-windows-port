@@ -12,6 +12,17 @@ struct GoldenEyeRendererPacketPreview {
     bool has_resolved_address{};
 };
 
+struct GoldenEyeRendererTextureImagePreview {
+    uint32_t command_addr{};
+    uint32_t w0{};
+    uint32_t w1{};
+    uint32_t resolved_address{};
+    uint32_t segment_base{};
+    uint8_t segment{};
+    bool segmented{};
+    bool valid{};
+};
+
 struct GoldenEyeRendererTaskResult {
     uint32_t first_gdl{};
     uint32_t end_gdl{};
@@ -35,6 +46,7 @@ struct GoldenEyeRendererTaskResult {
     uint32_t triangle_commands{};
     uint32_t geometry_mode_commands{};
     uint32_t texture_image_commands{};
+    uint32_t malformed_texture_image_commands{};
     uint32_t texture_image_segmented_refs{};
     uint32_t resolved_texture_image_refs{};
     uint32_t unresolved_texture_image_refs{};
@@ -64,7 +76,7 @@ struct GoldenEyeRendererTaskResult {
     std::size_t first_command_count{};
     std::array<uint64_t, 8> branch_first_commands{};
     std::size_t branch_first_command_count{};
-    std::array<uint32_t, 8> first_texture_images{};
+    std::array<GoldenEyeRendererTextureImagePreview, 8> first_texture_images{};
     std::size_t first_texture_image_count{};
     std::array<GoldenEyeRendererPacketPreview, 16> backend_packet_previews{};
     std::size_t backend_packet_preview_count{};

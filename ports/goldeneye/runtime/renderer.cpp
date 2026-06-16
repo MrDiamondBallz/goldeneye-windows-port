@@ -81,6 +81,15 @@ bool is_rsp_opcode(uint32_t opcode) {
     return !is_rdp_opcode(opcode);
 }
 
+bool is_valid_set_image_command(uint32_t w0) {
+    // gDPSet{Color,Texture}Image encodes G_IM_FMT_* in bits 21..23 and
+    // G_IM_SIZ_* in bits 19..20. GoldenEye's PR/gbi.h defines legal formats
+    // as RGBA/YUV/CI/IA/I (0..4). Higher values mean the scanner has walked
+    // non-display-list payload bytes that merely happen to start with 0xFD.
+    const uint32_t format = (w0 >> 21) & 0x7u;
+    return format <= 4u;
+}
+
 bool decode_segment_move_word(uint32_t w0, uint32_t w1, std::array<uint32_t, kSegmentCount>& segments) {
     const uint32_t opcode = w0 >> 24;
     const uint32_t index = w0 & 0xFFu;
@@ -150,6 +159,51 @@ bool read_command(uint8_t* rdram, uint32_t command_addr, uint32_t* w0, uint32_t*
         && read_u32(rdram, command_addr + 4u, w1);
 }
 
+bool texture_trace_enabled() {
+    const char* value = std::getenv("GOLDENEYE_RENDERER_TRACE_TEXTURES");
+    return value != nullptr && value[0] != '\0' && value[0] != '0';
+}
+
+void trace_texture_candidate(
+    uint8_t* rdram,
+    uint32_t command_addr,
+    uint32_t w0,
+    uint32_t w1,
+    const std::array<uint32_t, kSegmentCount>& segments,
+    uint32_t resolved_address,
+    bool valid) {
+    if (!texture_trace_enabled()) {
+        return;
+    }
+
+    std::printf("host_renderer_texture_trace cmd=0x%08X w0=0x%08X w1=0x%08X resolved=0x%08X valid=%d",
+        command_addr,
+        w0,
+        w1,
+        resolved_address,
+        valid ? 1 : 0);
+    for (std::size_t i = 0; i < segments.size(); ++i) {
+        if (segments[i] != 0) {
+            std::printf(" seg%zu=0x%08X", i, segments[i]);
+        }
+    }
+    std::printf("\n");
+
+    for (int delta = -2; delta <= 2; ++delta) {
+        const uint32_t nearby_addr = command_addr + static_cast<uint32_t>(delta * static_cast<int>(kMinimumCommandBytes));
+        uint32_t nearby_w0 = 0;
+        uint32_t nearby_w1 = 0;
+        if (read_command(rdram, nearby_addr, &nearby_w0, &nearby_w1)) {
+            std::printf("  texture_trace_nearby %+d addr=0x%08X w0=0x%08X w1=0x%08X op=0x%02X\n",
+                delta,
+                nearby_addr,
+                nearby_w0,
+                nearby_w1,
+                nearby_w0 >> 24);
+        }
+    }
+}
+
 void record_command_preview(GoldenEyeRendererTaskResult& result, uint64_t command, bool top_level) {
     if (top_level) {
         if (result.first_command_count < result.first_commands.size()) {
@@ -163,16 +217,35 @@ void record_command_preview(GoldenEyeRendererTaskResult& result, uint64_t comman
     }
 }
 
-void record_texture_image_preview(GoldenEyeRendererTaskResult& result, uint32_t image_addr) {
+void record_texture_image_preview(
+    GoldenEyeRendererTaskResult& result,
+    uint32_t command_addr,
+    uint32_t w0,
+    uint32_t w1,
+    uint32_t resolved_address,
+    bool valid,
+    const std::array<uint32_t, kSegmentCount>& segments) {
     if (result.first_texture_image_count >= result.first_texture_images.size()) {
         return;
     }
-    const auto begin = result.first_texture_images.begin();
-    const auto end = begin + static_cast<std::ptrdiff_t>(result.first_texture_image_count);
-    if (std::find(begin, end, image_addr) != end) {
-        return;
+    for (std::size_t i = 0; i < result.first_texture_image_count; ++i) {
+        const GoldenEyeRendererTextureImagePreview& existing = result.first_texture_images[i];
+        if (existing.command_addr == command_addr && existing.w0 == w0 && existing.w1 == w1) {
+            return;
+        }
     }
-    result.first_texture_images[result.first_texture_image_count++] = image_addr;
+
+    GoldenEyeRendererTextureImagePreview& preview = result.first_texture_images[result.first_texture_image_count++];
+    preview.command_addr = command_addr;
+    preview.w0 = w0;
+    preview.w1 = w1;
+    preview.resolved_address = resolved_address;
+    preview.segmented = is_segmented_address(w1);
+    preview.valid = valid;
+    if (preview.segmented) {
+        preview.segment = static_cast<uint8_t>(w1 >> 24);
+        preview.segment_base = segments[preview.segment];
+    }
 }
 
 void record_backend_packet_preview(
@@ -227,6 +300,7 @@ bool stack_contains(const std::vector<uint32_t>& stack, uint32_t vaddr) {
 
 void classify_command(
     uint8_t* rdram,
+    uint32_t command_addr,
     uint32_t w0,
     uint32_t w1,
     const std::array<uint32_t, kSegmentCount>& segments,
@@ -325,6 +399,12 @@ void classify_command(
         preview_backend_packet = true;
         break;
     case 0xFDu: // SetTextureImage
+        if (!is_valid_set_image_command(w0)) {
+            result.malformed_texture_image_commands++;
+            trace_texture_candidate(rdram, command_addr, w0, w1, segments, w1, false);
+            record_texture_image_preview(result, command_addr, w0, w1, w1, false, segments);
+            break;
+        }
         result.texture_image_commands++;
         result.backend_texture_packets++;
         preview_backend_packet = true;
@@ -332,12 +412,13 @@ void classify_command(
             result.texture_image_segmented_refs++;
         }
         validate_address(w1);
+        trace_texture_candidate(rdram, command_addr, w0, w1, segments, resolved_address, has_resolved_address);
         if (has_resolved_address) {
             result.resolved_texture_image_refs++;
-            record_texture_image_preview(result, resolved_address);
+            record_texture_image_preview(result, command_addr, w0, w1, resolved_address, true, segments);
         } else {
             result.unresolved_texture_image_refs++;
-            record_texture_image_preview(result, resolved_address != 0 ? resolved_address : w1);
+            record_texture_image_preview(result, command_addr, w0, w1, resolved_address != 0 ? resolved_address : w1, false, segments);
         }
         break;
     case 0xFEu: // SetDepthImage / Z image
@@ -460,7 +541,7 @@ void scan_display_list(
 
         const uint32_t opcode = w0 >> 24;
         decode_segment_move_word(w0, w1, segments);
-        classify_command(rdram, w0, w1, segments, result);
+        classify_command(rdram, command_addr, w0, w1, segments, result);
 
         result.commands_scanned++;
         if (depth > 0) {
@@ -573,13 +654,14 @@ void goldeneye_renderer_print_task_result(const GoldenEyeRendererTaskResult& res
         result.depth_limit_hit ? 1 : 0);
 
     std::printf(
-        "host_renderer_presentation matrix=%u vertex=%u texture=%u triangles=%u geom_mode=%u tex_images=%u tex_segmented=%u tex_resolved=%u tex_unresolved=%u color_images=%u depth_images=%u tile_setup=%u texture_loads=%u combine=%u sync=%u fill_rect=%u othermode=%u packets=%u\n",
+        "host_renderer_presentation matrix=%u vertex=%u texture=%u triangles=%u geom_mode=%u tex_images=%u tex_malformed=%u tex_segmented=%u tex_resolved=%u tex_unresolved=%u color_images=%u depth_images=%u tile_setup=%u texture_loads=%u combine=%u sync=%u fill_rect=%u othermode=%u packets=%u\n",
         result.matrix_commands,
         result.vertex_commands,
         result.texture_commands,
         result.triangle_commands,
         result.geometry_mode_commands,
         result.texture_image_commands,
+        result.malformed_texture_image_commands,
         result.texture_image_segmented_refs,
         result.resolved_texture_image_refs,
         result.unresolved_texture_image_refs,
@@ -633,6 +715,17 @@ void goldeneye_renderer_print_task_result(const GoldenEyeRendererTaskResult& res
             static_cast<uint32_t>(result.branch_first_commands[i]));
     }
     for (std::size_t i = 0; i < result.first_texture_image_count; ++i) {
-        std::printf("  host_renderer_texture_image[%zu]=0x%08X\n", i, result.first_texture_images[i]);
+        const GoldenEyeRendererTextureImagePreview& preview = result.first_texture_images[i];
+        std::printf(
+            "  host_renderer_texture_image[%zu]=cmd=0x%08X w0=0x%08X w1=0x%08X resolved=0x%08X valid=%d segmented=%d segment=%u segment_base=0x%08X\n",
+            i,
+            preview.command_addr,
+            preview.w0,
+            preview.w1,
+            preview.resolved_address,
+            preview.valid ? 1 : 0,
+            preview.segmented ? 1 : 0,
+            preview.segment,
+            preview.segment_base);
     }
 }

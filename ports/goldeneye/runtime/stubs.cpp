@@ -208,14 +208,44 @@ void musicSeqPlayerInit(uint8_t*, recomp_context* ctx) {
     }
 }
 
-void decompressdata(uint8_t*, recomp_context* ctx) {
-    // Placeholder for compressed asset expansion. Returning 0 is enough to keep
-    // early boot/main-thread probes moving to the next runtime boundary; real
-    // asset streaming needs a host implementation, not generated zlib on stubbed
-    // memory pools.
-    if (ctx != nullptr) {
-        ctx->r2 = 0;
+void decompressdata(uint8_t* rdram, recomp_context* ctx) {
+    if (ctx == nullptr) {
+        return;
     }
+
+    const char* enable_bridge = std::getenv("GOLDENEYE_ENABLE_DECOMPRESS_BRIDGE");
+    if (enable_bridge == nullptr || enable_bridge[0] == '\0' || enable_bridge[0] == '0') {
+        // Keep default guarded probes at the known renderer/RSP boundary. The
+        // generated inflater bridge is useful for experiments, but currently
+        // reaches a deeper generated-zlib stall before the renderer task.
+        ctx->r2 = 0;
+        return;
+    }
+
+    constexpr uint32_t kRzInbuf = 0x8008D350u;
+    constexpr uint32_t kRzOutbuf = 0x8008D354u;
+    constexpr uint32_t kRzInptr = 0x8008D358u;
+    constexpr uint32_t kRzWp = 0x8008D35Cu;
+    constexpr uint32_t kRzHlist = 0x8008D360u;
+
+    const uint32_t source = static_cast<uint32_t>(ctx->r4);
+    const uint32_t target = static_cast<uint32_t>(ctx->r5);
+    const uint32_t hlist = static_cast<uint32_t>(ctx->r6);
+
+    // Native bridge for GoldenEye's rz/zlib wrapper. The original decompressdata
+    // only seeds the global rz_* pointers, skips the two-byte rz header, calls the
+    // generated zlib inflater, then returns rz_wp. Keeping this bridge means asset
+    // payloads can expand through generated code while the host still owns the
+    // higher-level runtime seams.
+    write_runtime_word(rdram, kRzInbuf, static_cast<int32_t>(source + 2u));
+    write_runtime_word(rdram, kRzOutbuf, static_cast<int32_t>(target));
+    write_runtime_word(rdram, kRzInptr, 0);
+    write_runtime_word(rdram, kRzWp, 0);
+    write_runtime_word(rdram, kRzHlist, static_cast<int32_t>(hlist));
+
+    recomp_context inflate_ctx{};
+    zlib_inflate(rdram, &inflate_ctx);
+    ctx->r2 = static_cast<uint32_t>(read_runtime_word(rdram, kRzWp));
 }
 
 void alCSeqNew(uint8_t*, recomp_context* ctx) {
