@@ -27,6 +27,7 @@ constexpr std::size_t kSegmentCount = 16;
 
 struct BranchTarget {
     uint32_t vaddr{};
+    uint32_t source_addr{};
     std::array<uint32_t, kSegmentCount> segments{};
 };
 
@@ -79,6 +80,42 @@ bool is_rdp_opcode(uint32_t opcode) {
 
 bool is_rsp_opcode(uint32_t opcode) {
     return !is_rdp_opcode(opcode);
+}
+
+bool is_known_gbi_or_rdp_opcode(uint32_t opcode) {
+    switch (opcode) {
+    case kGbiMatrix:
+    case kGbiVertex:
+    case kGbiBranchDl:
+    case kGbiTriangle1:
+    case kGbiCullDl:
+    case kGbiPopMatrix:
+    case kGbiMoveWord:
+    case kGbiTexture:
+    case kGbiSetGeometryMode:
+    case kGbiClearGeometryMode:
+    case kGbiEndDisplayList:
+    case 0xB9u:
+    case 0xBAu:
+    case 0xE6u:
+    case 0xE7u:
+    case 0xE8u:
+    case 0xE9u:
+    case 0xEFu:
+    case 0xF0u:
+    case 0xF2u:
+    case 0xF3u:
+    case 0xF4u:
+    case 0xF5u:
+    case 0xF6u:
+    case 0xFCu:
+    case 0xFDu:
+    case 0xFEu:
+    case 0xFFu:
+        return true;
+    default:
+        return false;
+    }
 }
 
 bool is_valid_set_image_command(uint32_t w0) {
@@ -159,6 +196,35 @@ bool read_command(uint8_t* rdram, uint32_t command_addr, uint32_t* w0, uint32_t*
         && read_u32(rdram, command_addr + 4u, w1);
 }
 
+bool looks_like_display_list_neighborhood(uint8_t* rdram, uint32_t command_addr) {
+    uint32_t readable = 0;
+    uint32_t known = 0;
+    bool has_texture_sequence_neighbor = false;
+
+    for (int delta = -2; delta <= 2; ++delta) {
+        const uint32_t nearby_addr = command_addr + static_cast<uint32_t>(delta * static_cast<int>(kMinimumCommandBytes));
+        uint32_t nearby_w0 = 0;
+        uint32_t nearby_w1 = 0;
+        if (!read_command(rdram, nearby_addr, &nearby_w0, &nearby_w1)) {
+            continue;
+        }
+        readable++;
+        const uint32_t opcode = nearby_w0 >> 24;
+        if (is_known_gbi_or_rdp_opcode(opcode)) {
+            known++;
+        }
+        if (delta != 0 && (opcode == 0xE6u || opcode == 0xE7u || opcode == 0xF2u || opcode == 0xF3u || opcode == 0xF4u || opcode == 0xF5u || opcode == kGbiTexture)) {
+            has_texture_sequence_neighbor = true;
+        }
+    }
+
+    // A real GoldenEye display-list image command usually sits inside a dense
+    // run of recognizable GBI/RDP packets. Payload bytes often only match 0xFD
+    // by accident, with random-looking neighbors. Keep this heuristic simple so
+    // trace output exposes uncertainty instead of hiding it.
+    return readable >= 3 && (known >= 3 || (known >= 2 && has_texture_sequence_neighbor));
+}
+
 bool texture_trace_enabled() {
     const char* value = std::getenv("GOLDENEYE_RENDERER_TRACE_TEXTURES");
     return value != nullptr && value[0] != '\0' && value[0] != '0';
@@ -167,21 +233,33 @@ bool texture_trace_enabled() {
 void trace_texture_candidate(
     uint8_t* rdram,
     uint32_t command_addr,
+    uint32_t list_start,
+    uint32_t branch_source_addr,
+    uint32_t depth,
+    uint32_t local_command_index,
     uint32_t w0,
     uint32_t w1,
     const std::array<uint32_t, kSegmentCount>& segments,
     uint32_t resolved_address,
-    bool valid) {
+    bool valid,
+    bool plausible_command_neighborhood,
+    bool likely_payload_false_positive) {
     if (!texture_trace_enabled()) {
         return;
     }
 
-    std::printf("host_renderer_texture_trace cmd=0x%08X w0=0x%08X w1=0x%08X resolved=0x%08X valid=%d",
+    std::printf("host_renderer_texture_trace cmd=0x%08X list=0x%08X branch_src=0x%08X depth=%u local_index=%u w0=0x%08X w1=0x%08X resolved=0x%08X valid=%d plausible=%d payload_false_positive=%d",
         command_addr,
+        list_start,
+        branch_source_addr,
+        depth,
+        local_command_index,
         w0,
         w1,
         resolved_address,
-        valid ? 1 : 0);
+        valid ? 1 : 0,
+        plausible_command_neighborhood ? 1 : 0,
+        likely_payload_false_positive ? 1 : 0);
     for (std::size_t i = 0; i < segments.size(); ++i) {
         if (segments[i] != 0) {
             std::printf(" seg%zu=0x%08X", i, segments[i]);
@@ -220,10 +298,16 @@ void record_command_preview(GoldenEyeRendererTaskResult& result, uint64_t comman
 void record_texture_image_preview(
     GoldenEyeRendererTaskResult& result,
     uint32_t command_addr,
+    uint32_t list_start,
+    uint32_t branch_source_addr,
+    uint32_t depth,
+    uint32_t local_command_index,
     uint32_t w0,
     uint32_t w1,
     uint32_t resolved_address,
     bool valid,
+    bool plausible_command_neighborhood,
+    bool likely_payload_false_positive,
     const std::array<uint32_t, kSegmentCount>& segments) {
     if (result.first_texture_image_count >= result.first_texture_images.size()) {
         return;
@@ -237,11 +321,17 @@ void record_texture_image_preview(
 
     GoldenEyeRendererTextureImagePreview& preview = result.first_texture_images[result.first_texture_image_count++];
     preview.command_addr = command_addr;
+    preview.list_start = list_start;
+    preview.branch_source_addr = branch_source_addr;
+    preview.depth = depth;
+    preview.local_command_index = local_command_index;
     preview.w0 = w0;
     preview.w1 = w1;
     preview.resolved_address = resolved_address;
     preview.segmented = is_segmented_address(w1);
     preview.valid = valid;
+    preview.plausible_command_neighborhood = plausible_command_neighborhood;
+    preview.likely_payload_false_positive = likely_payload_false_positive;
     if (preview.segmented) {
         preview.segment = static_cast<uint8_t>(w1 >> 24);
         preview.segment_base = segments[preview.segment];
@@ -301,6 +391,10 @@ bool stack_contains(const std::vector<uint32_t>& stack, uint32_t vaddr) {
 void classify_command(
     uint8_t* rdram,
     uint32_t command_addr,
+    uint32_t list_start,
+    uint32_t branch_source_addr,
+    uint32_t depth,
+    uint32_t local_command_index,
     uint32_t w0,
     uint32_t w1,
     const std::array<uint32_t, kSegmentCount>& segments,
@@ -398,29 +492,138 @@ void classify_command(
         result.backend_state_packets++;
         preview_backend_packet = true;
         break;
-    case 0xFDu: // SetTextureImage
-        if (!is_valid_set_image_command(w0)) {
-            result.malformed_texture_image_commands++;
-            trace_texture_candidate(rdram, command_addr, w0, w1, segments, w1, false);
-            record_texture_image_preview(result, command_addr, w0, w1, w1, false, segments);
+    case 0xFDu: { // SetTextureImage
+        result.texture_image_raw_candidates++;
+        const bool valid_set_image = is_valid_set_image_command(w0);
+        const bool plausible_neighborhood = looks_like_display_list_neighborhood(rdram, command_addr);
+        const bool likely_payload_false_positive = !plausible_neighborhood;
+
+        if (likely_payload_false_positive) {
+            result.texture_image_payload_false_positives++;
+            trace_texture_candidate(
+                rdram,
+                command_addr,
+                list_start,
+                branch_source_addr,
+                depth,
+                local_command_index,
+                w0,
+                w1,
+                segments,
+                w1,
+                false,
+                plausible_neighborhood,
+                likely_payload_false_positive);
+            record_texture_image_preview(
+                result,
+                command_addr,
+                list_start,
+                branch_source_addr,
+                depth,
+                local_command_index,
+                w0,
+                w1,
+                w1,
+                false,
+                plausible_neighborhood,
+                likely_payload_false_positive,
+                segments);
             break;
         }
+
+        if (!valid_set_image) {
+            result.malformed_texture_image_commands++;
+            result.texture_image_malformed_dl_commands++;
+            trace_texture_candidate(
+                rdram,
+                command_addr,
+                list_start,
+                branch_source_addr,
+                depth,
+                local_command_index,
+                w0,
+                w1,
+                segments,
+                w1,
+                false,
+                plausible_neighborhood,
+                likely_payload_false_positive);
+            record_texture_image_preview(
+                result,
+                command_addr,
+                list_start,
+                branch_source_addr,
+                depth,
+                local_command_index,
+                w0,
+                w1,
+                w1,
+                false,
+                plausible_neighborhood,
+                likely_payload_false_positive,
+                segments);
+            break;
+        }
+
         result.texture_image_commands++;
+        result.texture_image_real_dl_commands++;
         result.backend_texture_packets++;
         preview_backend_packet = true;
         if (is_segmented_address(w1)) {
             result.texture_image_segmented_refs++;
         }
         validate_address(w1);
-        trace_texture_candidate(rdram, command_addr, w0, w1, segments, resolved_address, has_resolved_address);
+        trace_texture_candidate(
+            rdram,
+            command_addr,
+            list_start,
+            branch_source_addr,
+            depth,
+            local_command_index,
+            w0,
+            w1,
+            segments,
+            resolved_address,
+            has_resolved_address,
+            plausible_neighborhood,
+            likely_payload_false_positive);
         if (has_resolved_address) {
             result.resolved_texture_image_refs++;
-            record_texture_image_preview(result, command_addr, w0, w1, resolved_address, true, segments);
+            result.texture_image_real_backed++;
+            record_texture_image_preview(
+                result,
+                command_addr,
+                list_start,
+                branch_source_addr,
+                depth,
+                local_command_index,
+                w0,
+                w1,
+                resolved_address,
+                true,
+                plausible_neighborhood,
+                likely_payload_false_positive,
+                segments);
         } else {
             result.unresolved_texture_image_refs++;
-            record_texture_image_preview(result, command_addr, w0, w1, resolved_address != 0 ? resolved_address : w1, false, segments);
+            result.texture_image_real_unbacked++;
+            record_texture_image_preview(
+                result,
+                command_addr,
+                list_start,
+                branch_source_addr,
+                depth,
+                local_command_index,
+                w0,
+                w1,
+                resolved_address != 0 ? resolved_address : w1,
+                false,
+                plausible_neighborhood,
+                likely_payload_false_positive,
+                segments);
         }
         break;
+    }
     case 0xFEu: // SetDepthImage / Z image
         result.depth_image_commands++;
         result.backend_target_packets++;
@@ -481,6 +684,7 @@ void scan_display_list(
     uint8_t* rdram,
     uint32_t list_start,
     uint32_t list_end,
+    uint32_t branch_source_addr,
     uint32_t depth,
     const uint32_t depth_limit,
     const uint32_t command_limit,
@@ -541,7 +745,17 @@ void scan_display_list(
 
         const uint32_t opcode = w0 >> 24;
         decode_segment_move_word(w0, w1, segments);
-        classify_command(rdram, command_addr, w0, w1, segments, result);
+        classify_command(
+            rdram,
+            command_addr,
+            list_start,
+            branch_source_addr,
+            depth,
+            commands_in_list,
+            w0,
+            w1,
+            segments,
+            result);
 
         result.commands_scanned++;
         if (depth > 0) {
@@ -571,7 +785,7 @@ void scan_display_list(
             } else if (depth + 1 > depth_limit) {
                 result.depth_limit_hit = true;
             } else {
-                branch_targets.push_back(BranchTarget{branch_vaddr, segments});
+                branch_targets.push_back(BranchTarget{branch_vaddr, command_addr, segments});
             }
         }
 
@@ -587,6 +801,7 @@ void scan_display_list(
             rdram,
             target.vaddr,
             0,
+            target.source_addr,
             depth + 1,
             depth_limit,
             command_limit,
@@ -619,6 +834,7 @@ GoldenEyeRendererTaskResult goldeneye_renderer_execute_display_list_task(
         rdram,
         first_gdl,
         end_gdl,
+        0,
         0,
         renderer_depth_limit(),
         renderer_command_limit(),
@@ -676,6 +892,15 @@ void goldeneye_renderer_print_task_result(const GoldenEyeRendererTaskResult& res
         result.presentation_packets);
 
     std::printf(
+        "host_renderer_texture_classification raw_candidates=%u real_dl=%u malformed_dl=%u false_payload=%u backed=%u real_unbacked=%u\n",
+        result.texture_image_raw_candidates,
+        result.texture_image_real_dl_commands,
+        result.texture_image_malformed_dl_commands,
+        result.texture_image_payload_false_positives,
+        result.texture_image_real_backed,
+        result.texture_image_real_unbacked);
+
+    std::printf(
         "host_renderer_backend packets=%u geometry=%u state=%u texture=%u target=%u sync=%u address_refs=%u valid_refs=%u invalid_refs=%u\n",
         result.backend_packets,
         result.backend_geometry_packets,
@@ -717,13 +942,19 @@ void goldeneye_renderer_print_task_result(const GoldenEyeRendererTaskResult& res
     for (std::size_t i = 0; i < result.first_texture_image_count; ++i) {
         const GoldenEyeRendererTextureImagePreview& preview = result.first_texture_images[i];
         std::printf(
-            "  host_renderer_texture_image[%zu]=cmd=0x%08X w0=0x%08X w1=0x%08X resolved=0x%08X valid=%d segmented=%d segment=%u segment_base=0x%08X\n",
+            "  host_renderer_texture_image[%zu]=cmd=0x%08X list=0x%08X branch_src=0x%08X depth=%u local_index=%u w0=0x%08X w1=0x%08X resolved=0x%08X valid=%d plausible=%d payload_false_positive=%d segmented=%d segment=%u segment_base=0x%08X\n",
             i,
             preview.command_addr,
+            preview.list_start,
+            preview.branch_source_addr,
+            preview.depth,
+            preview.local_command_index,
             preview.w0,
             preview.w1,
             preview.resolved_address,
             preview.valid ? 1 : 0,
+            preview.plausible_command_neighborhood ? 1 : 0,
+            preview.likely_payload_false_positive ? 1 : 0,
             preview.segmented ? 1 : 0,
             preview.segment,
             preview.segment_base);

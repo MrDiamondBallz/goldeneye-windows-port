@@ -14,13 +14,19 @@ struct GoldenEyeRendererPacketPreview {
 
 struct GoldenEyeRendererTextureImagePreview {
     uint32_t command_addr{};
+    uint32_t list_start{};
+    uint32_t branch_source_addr{};
     uint32_t w0{};
     uint32_t w1{};
     uint32_t resolved_address{};
     uint32_t segment_base{};
+    uint32_t depth{};
+    uint32_t local_command_index{};
     uint8_t segment{};
     bool segmented{};
     bool valid{};
+    bool plausible_command_neighborhood{};
+    bool likely_payload_false_positive{};
 };
 
 struct GoldenEyeRendererTaskResult {
@@ -46,6 +52,12 @@ struct GoldenEyeRendererTaskResult {
     uint32_t triangle_commands{};
     uint32_t geometry_mode_commands{};
     uint32_t texture_image_commands{};
+    uint32_t texture_image_raw_candidates{};
+    uint32_t texture_image_real_dl_commands{};
+    uint32_t texture_image_payload_false_positives{};
+    uint32_t texture_image_malformed_dl_commands{};
+    uint32_t texture_image_real_unbacked{};
+    uint32_t texture_image_real_backed{};
     uint32_t malformed_texture_image_commands{};
     uint32_t texture_image_segmented_refs{};
     uint32_t resolved_texture_image_refs{};
