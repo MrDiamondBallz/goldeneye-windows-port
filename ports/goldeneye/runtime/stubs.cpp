@@ -164,39 +164,162 @@ void alFxNew(uint8_t*, recomp_context* ctx) {
     }
 }
 
+bool memp_pool_is_usable(const GoldenEyeMempPool& pool) {
+    return pool.start != 0 && pool.pos != 0 && pool.end != 0
+        && pool.start <= pool.pos && pool.pos < pool.end;
+}
+
+void print_memp_pool_state(const char* prefix, uint32_t bank, const GoldenEyeMempPool& pool) {
+    std::printf("%s bank=%u start=0x%08X pos=0x%08X end=0x%08X prevpos=0x%08X usable=%d\n",
+        prefix,
+        bank,
+        pool.start,
+        pool.pos,
+        pool.end,
+        pool.prevpos,
+        memp_pool_is_usable(pool) ? 1 : 0);
+}
+
+bool allocate_from_memp_pool(uint8_t* rdram, uint32_t bank, uint32_t bytes, uint32_t* out_allocation) {
+    GoldenEyeMempPool pool{};
+    if (out_allocation == nullptr || !goldeneye_runtime_read_memp_pool(rdram, static_cast<uint8_t>(bank), &pool)) {
+        return false;
+    }
+    print_memp_pool_state("memp_pool", bank, pool);
+    if (!memp_pool_is_usable(pool) || bytes == 0) {
+        return false;
+    }
+
+    const uint32_t allocation = align16(pool.pos);
+    const uint32_t next = align16(allocation + bytes);
+    uint8_t* host_ptr = nullptr;
+    if (next <= allocation || next > pool.end || !goldeneye_runtime_translate(rdram, allocation, bytes, &host_ptr)) {
+        return false;
+    }
+
+    std::memset(host_ptr, 0, bytes);
+    pool.prevpos = allocation;
+    pool.pos = next;
+    if (!goldeneye_runtime_write_memp_pool(rdram, static_cast<uint8_t>(bank), pool)) {
+        return false;
+    }
+
+    goldeneye_runtime_record_resource(GoldenEyeResourceKind::MempAlloc, allocation, bytes, 0, static_cast<uint8_t>(bank));
+    std::printf("memp_alloc_result source=pool bank=%u bytes=0x%X vaddr=0x%08X next=0x%08X\n",
+        bank,
+        bytes,
+        allocation,
+        next);
+    *out_allocation = allocation;
+    return true;
+}
+
 void mempAllocBytesInBank(uint8_t* rdram, recomp_context* ctx) {
     if (ctx == nullptr) {
         return;
     }
 
+    constexpr uint32_t kScratchLimit = 0x803A0000u;
     const uint32_t bytes = static_cast<uint32_t>(ctx->r4);
-    const uint32_t bank = static_cast<uint32_t>(ctx->r5 & 0xFFu);
-    const uint32_t allocation = align16(g_host_memp_cursor);
-    const uint32_t next = align16(allocation + bytes);
+    const uint32_t requested_bank = static_cast<uint32_t>(ctx->r5 & 0xFFu);
 
-    uint8_t* host_ptr = nullptr;
-    if (bytes == 0 || next <= allocation || next >= 0x803A0000u || !goldeneye_runtime_translate(rdram, allocation, bytes, &host_ptr)) {
-        std::fprintf(stderr,
-            "mempAllocBytesInBank host allocator failed bytes=0x%X bank=%u cursor=0x%08X\n",
+    uint32_t allocation = 0;
+    if (requested_bank < 16 && allocate_from_memp_pool(rdram, requested_bank, bytes, &allocation)) {
+        ctx->r2 = S32(allocation);
+        return;
+    }
+    if (requested_bank != 6 && allocate_from_memp_pool(rdram, 6, bytes, &allocation)) {
+        std::printf("memp_alloc_fallback requested_bank=%u fallback_bank=6 bytes=0x%X vaddr=0x%08X\n",
+            requested_bank,
             bytes,
-            bank,
-            g_host_memp_cursor);
-        ctx->r2 = 0;
+            allocation);
+        ctx->r2 = S32(allocation);
         return;
     }
 
-    std::memset(host_ptr, 0, bytes);
-    g_host_memp_cursor = next;
-    ctx->r2 = S32(allocation);
+    const uint32_t scratch = align16(g_host_memp_cursor);
+    const uint32_t next = align16(scratch + bytes);
+    uint8_t* host_ptr = nullptr;
+    if (bytes != 0 && next > scratch && next < kScratchLimit && goldeneye_runtime_translate(rdram, scratch, bytes, &host_ptr)) {
+        std::memset(host_ptr, 0, bytes);
+        g_host_memp_cursor = next;
+        goldeneye_runtime_record_resource(GoldenEyeResourceKind::MempAlloc, scratch, bytes, 0, static_cast<uint8_t>(requested_bank));
+        std::printf("memp_alloc_result source=host_scratch bank=%u bytes=0x%X vaddr=0x%08X next=0x%08X reason=pool_uninitialized_or_invalid\n",
+            requested_bank,
+            bytes,
+            scratch,
+            next);
+        ctx->r2 = S32(scratch);
+        return;
+    }
+
+    std::printf("memp_alloc_result source=failed bank=%u bytes=0x%X cursor=0x%08X reason=%s\n",
+        requested_bank,
+        bytes,
+        g_host_memp_cursor,
+        bytes == 0 ? "zero_size" : "pool_and_scratch_unavailable");
+    ctx->r2 = 0;
 }
 
-void mempAddEntryOfSizeToBank(uint8_t*, recomp_context* ctx) {
-    // The host allocator does not maintain the original bank-entry metadata yet.
-    // Treat resize bookkeeping as successful so callers can continue through the
-    // next runtime surface.
-    if (ctx != nullptr) {
-        ctx->r2 = 1;
+void mempAddEntryOfSizeToBank(uint8_t* rdram, recomp_context* ctx) {
+    if (ctx == nullptr) {
+        return;
     }
+
+    constexpr uint32_t kNeedMemAllocation = 0x80024404u;
+    const uint32_t ptr = static_cast<uint32_t>(ctx->r4);
+    const uint32_t new_size = static_cast<uint32_t>(ctx->r5);
+    uint32_t bank = static_cast<uint32_t>(ctx->r6 & 0xFFu);
+    const uint32_t needmemallocation = static_cast<uint32_t>(read_runtime_word(rdram, kNeedMemAllocation));
+
+    GoldenEyeMempPool pool{};
+    bool pool_ok = bank < 16 && goldeneye_runtime_read_memp_pool(rdram, static_cast<uint8_t>(bank), &pool);
+    GoldenEyeMempPool bank6{};
+    if (goldeneye_runtime_read_memp_pool(rdram, 6, &bank6) && ptr == bank6.prevpos) {
+        bank = 6;
+        pool = bank6;
+        pool_ok = true;
+    }
+
+    if (pool_ok) {
+        print_memp_pool_state("memp_pool_resize", bank, pool);
+    }
+
+    const uint32_t next = align16(ptr + new_size);
+    if (pool_ok && memp_pool_is_usable(pool) && ptr == pool.prevpos && new_size != 0 && next >= ptr && next <= pool.end) {
+        pool.pos = next;
+        goldeneye_runtime_write_memp_pool(rdram, static_cast<uint8_t>(bank), pool);
+        goldeneye_runtime_record_resource(GoldenEyeResourceKind::MempResize, ptr, new_size, 0, static_cast<uint8_t>(bank));
+        std::printf("memp_resize_result source=pool bank=%u ptr=0x%08X size=0x%X next=0x%08X needmemallocation=0x%08X\n",
+            bank,
+            ptr,
+            new_size,
+            next,
+            needmemallocation);
+        ctx->r2 = 1;
+        return;
+    }
+
+    GoldenEyeResourceProvenance resource{};
+    if (new_size != 0 && goldeneye_runtime_find_resource(ptr, 1, &resource)) {
+        goldeneye_runtime_record_resource(GoldenEyeResourceKind::MempResize, ptr, new_size, resource.source_rom, resource.bank);
+        std::printf("memp_resize_result source=resource_table bank=%u ptr=0x%08X size=0x%X kind=%s needmemallocation=0x%08X reason=pool_prevpos_mismatch\n",
+            bank,
+            ptr,
+            new_size,
+            goldeneye_runtime_resource_kind_name(resource.kind),
+            needmemallocation);
+        ctx->r2 = 1;
+        return;
+    }
+
+    std::printf("memp_resize_result source=failed bank=%u ptr=0x%08X size=0x%X needmemallocation=0x%08X reason=%s\n",
+        bank,
+        ptr,
+        new_size,
+        needmemallocation,
+        new_size == 0 ? "zero_size" : "unbacked_or_invalid_pool");
+    ctx->r2 = 0;
 }
 
 void musicSeqPlayerInit(uint8_t*, recomp_context* ctx) {
@@ -213,11 +336,22 @@ void decompressdata(uint8_t* rdram, recomp_context* ctx) {
         return;
     }
 
+    const uint32_t source = static_cast<uint32_t>(ctx->r4);
+    const uint32_t target = static_cast<uint32_t>(ctx->r5);
+    const uint32_t hlist = static_cast<uint32_t>(ctx->r6);
+
     const char* enable_bridge = std::getenv("GOLDENEYE_ENABLE_DECOMPRESS_BRIDGE");
     if (enable_bridge == nullptr || enable_bridge[0] == '\0' || enable_bridge[0] == '0') {
         // Keep default guarded probes at the known renderer/RSP boundary. The
         // generated inflater bridge is useful for experiments, but currently
         // reaches a deeper generated-zlib stall before the renderer task.
+        if (target != 0) {
+            goldeneye_runtime_record_resource(GoldenEyeResourceKind::DecompressStub, target, 1, source);
+        }
+        std::printf("decompress_stub source=0x%08X target=0x%08X hlist=0x%08X bridge=0\n",
+            source,
+            target,
+            hlist);
         ctx->r2 = 0;
         return;
     }
@@ -227,10 +361,6 @@ void decompressdata(uint8_t* rdram, recomp_context* ctx) {
     constexpr uint32_t kRzInptr = 0x8008D358u;
     constexpr uint32_t kRzWp = 0x8008D35Cu;
     constexpr uint32_t kRzHlist = 0x8008D360u;
-
-    const uint32_t source = static_cast<uint32_t>(ctx->r4);
-    const uint32_t target = static_cast<uint32_t>(ctx->r5);
-    const uint32_t hlist = static_cast<uint32_t>(ctx->r6);
 
     // Native bridge for GoldenEye's rz/zlib wrapper. The original decompressdata
     // only seeds the global rz_* pointers, skips the two-byte rz header, calls the
@@ -245,7 +375,16 @@ void decompressdata(uint8_t* rdram, recomp_context* ctx) {
 
     recomp_context inflate_ctx{};
     zlib_inflate(rdram, &inflate_ctx);
-    ctx->r2 = static_cast<uint32_t>(read_runtime_word(rdram, kRzWp));
+    const uint32_t wp = static_cast<uint32_t>(read_runtime_word(rdram, kRzWp));
+    if (target != 0 && wp > target) {
+        goldeneye_runtime_record_resource(GoldenEyeResourceKind::DecompressStub, target, wp - target, source);
+    }
+    std::printf("decompress_stub source=0x%08X target=0x%08X hlist=0x%08X bridge=1 wp=0x%08X\n",
+        source,
+        target,
+        hlist,
+        wp);
+    ctx->r2 = wp;
 }
 
 void alCSeqNew(uint8_t*, recomp_context* ctx) {
@@ -343,6 +482,7 @@ void rspGfxTaskStart(uint8_t* rdram, recomp_context* ctx) {
 
     const GoldenEyeRendererTaskResult renderer_result = goldeneye_renderer_execute_display_list_task(rdram, first_gdl, end_gdl);
     goldeneye_renderer_print_task_result(renderer_result);
+    goldeneye_runtime_print_resource_summary();
 
     if (done_msg != 0) {
         write_runtime_half(rdram, done_msg, kOsScDoneMsg);

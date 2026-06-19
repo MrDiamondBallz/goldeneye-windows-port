@@ -40,6 +40,31 @@ struct GoldenEyeRuntimeDiagnostics {
     std::size_t rsp_done_messages_delivered{};
 };
 
+enum class GoldenEyeResourceKind : uint8_t {
+    RomDma,
+    CDataPreload,
+    CSegmentElfRestore,
+    MempAlloc,
+    MempResize,
+    DecompressStub,
+    Unknown,
+};
+
+struct GoldenEyeResourceProvenance {
+    uint32_t vaddr{};
+    uint32_t size{};
+    uint32_t source_rom{};
+    uint8_t bank{0xFFu};
+    GoldenEyeResourceKind kind{GoldenEyeResourceKind::Unknown};
+};
+
+struct GoldenEyeMempPool {
+    uint32_t start{};
+    uint32_t pos{};
+    uint32_t end{};
+    uint32_t prevpos{};
+};
+
 constexpr std::size_t kGoldenEyeRdramSize = 8 * 1024 * 1024;
 constexpr std::size_t kGoldenEyeLowMirrorBytes = 256 * 1024 * 1024;
 constexpr std::size_t kGoldenEyeHostAddressSpaceBytes = (std::size_t{4} * 1024 * 1024 * 1024) + kGoldenEyeRdramSize;
@@ -48,6 +73,12 @@ bool goldeneye_runtime_init(uint8_t* rdram, std::size_t rdram_size, const char* 
 void goldeneye_runtime_print_state(const GoldenEyeRuntimeState& state);
 GoldenEyeRuntimeDiagnostics goldeneye_runtime_get_diagnostics();
 void goldeneye_runtime_print_diagnostics();
+const char* goldeneye_runtime_resource_kind_name(GoldenEyeResourceKind kind);
+void goldeneye_runtime_record_resource(GoldenEyeResourceKind kind, uint32_t vaddr, uint32_t size, uint32_t source_rom = 0, uint8_t bank = 0xFFu);
+bool goldeneye_runtime_find_resource(uint32_t vaddr, std::size_t size, GoldenEyeResourceProvenance* out_resource);
+void goldeneye_runtime_print_resource_summary();
+bool goldeneye_runtime_read_memp_pool(uint8_t* rdram, uint8_t bank, GoldenEyeMempPool* out_pool);
+bool goldeneye_runtime_write_memp_pool(uint8_t* rdram, uint8_t bank, const GoldenEyeMempPool& pool);
 void goldeneye_runtime_record_queue_created();
 void goldeneye_runtime_record_message_sent();
 void goldeneye_runtime_record_message_received();

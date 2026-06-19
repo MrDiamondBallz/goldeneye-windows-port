@@ -345,6 +345,16 @@ grep -E 'memp_|resource_provenance|runtime_primitives|entrypoint_probe' /tmp/ge-
 
 **Expected:** fewer nonsensical global-cursor allocation failures; structured memp lines show bank start/pos/end/prevpos and real allocation/resize reasons.
 
+**Implemented checkpoint:** `GoldenEyeMempPool` helpers now read/write `g_mempPools`, `mempAllocBytesInBank` tries the requested bank then bank 6, and the compatibility path is explicitly labeled `source=host_scratch` when current pool state is initialized with no usable room. Guarded RSP1 records structured memp provenance instead of the old unstructured fake-cursor stderr spam:
+
+```text
+memp_pool bank=4 start=0x8008E360 pos=0x8008E360 end=0x8008E360 prevpos=0x00000000 usable=0
+memp_alloc_result source=host_scratch bank=4 bytes=0x25840 vaddr=0x80142420 next=0x80167C60 reason=pool_uninitialized_or_invalid
+resource_summary total=90 bytes=7489792 rom_dma=23 cdata=1 csegment=1 memp_alloc=65 memp_resize=0 decompress_stub=0
+```
+
+**Updated decision gate:** the next blocker is not another scratch cursor. Trace/replace real memp bank initialization (`mempSetBankStarts`/related generated setup) and decompression sizing so these resources become real pool-backed records.
+
 **Decision gate:**
 
 - If memp pools are uninitialized before use, trace whether generated `mempCheckMemflagTokens`/`mempSetBankStarts` ran and what total pool start/size were.
@@ -410,6 +420,17 @@ grep -E 'resource_summary|texture_resource|texture_classification|host_renderer_
 ```
 
 **Expected:** render targets/matrices/texture candidates can distinguish “translated memory” from “known resource-backed memory.”
+
+**Implemented checkpoint:** renderer backend refs now report both translation validity and resource backing. Guarded RSP1 currently proves `10` translated address refs, `6` backed refs, and `4` translated-but-unbacked refs:
+
+```text
+host_renderer_backend packets=273 geometry=7 state=30 texture=220 target=5 sync=11 address_refs=10 valid_refs=10 invalid_refs=0 backed_refs=6 unbacked_refs=4
+host_renderer_backend_packet[1]=set_depth_image ... resolved=0x80142440 valid=1 backed=1 kind=memp_alloc bank=4 resource_size=0x25840
+host_renderer_backend_packet[8]=matrix ... resolved=0x8011B520 valid=1 backed=1 kind=memp_alloc bank=4 resource_size=0x200
+host_renderer_backend_packet[9]=set_color_image ... resolved=0x803DA800 valid=1 backed=1 kind=rom_dma bank=255 resource_size=0x70010
+```
+
+Texture candidates are still malformed in the guarded default path, so `host_renderer_texture_resource` only appears once real translated texture-image commands exist or when deliberate forensic over-walk exposes them.
 
 ---
 

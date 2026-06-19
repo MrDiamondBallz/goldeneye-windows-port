@@ -273,9 +273,10 @@ probe get_csegmentSegmentStart -> OK r2=0xFFFFFFFF80020D90 sp=0xFFFFFFFF807FF000
 metadata return_null 0x7F06C46C -> FOUND dispatch=ENABLED
 probe return_null -> OK r2=0x0000000000000000 sp=0xFFFFFFFF807FF000
 runtime_primitives: rom_bytes=12582912 dma_copies=6 dma_bytes=1146464 queues_created=1 messages_sent=2 messages_received=1 threads_created=1 threads_started=1 threads_dispatched=0 rsp_tasks_started=0 rsp_done_messages_delivered=0
+resource_summary total=7 bytes=1224704 rom_dma=6 cdata=1 csegment=0 memp_alloc=0 memp_resize=0 decompress_stub=0
 entrypoint_probe=skipped set GOLDENEYE_TRY_ENTRYPOINT=1 to attempt guarded child process
 controlled_probe_result=OK boot_primitives_enabled safe_generated_dispatch_enabled
-next_runtime_blocker=renderer branch guard now skips payload/data branch targets by default; next layer is real memp/resource provenance before RT64/custom rendering
+next_runtime_blocker=resource provenance now backs renderer refs; next layer is real memp pool initialization/decompression provenance before RT64/custom rendering
 ```
 
 Guarded entrypoint/main-thread probe:
@@ -297,16 +298,18 @@ host_renderer_branch_target source=0x8011BC70 target=0x8011CA50 depth=1 classifi
 host_renderer_branch_summary targets=3 plausible=0 payload_or_unknown=3 untranslated=0 skipped=3 scheduled=0 payload_scan_enabled=0
 host_renderer_presentation matrix=7 vertex=0 texture=3 triangles=0 geom_mode=7 tex_images=0 tex_malformed=2 tex_segmented=0 tex_resolved=0 tex_unresolved=0 color_images=2 depth_images=1 tile_setup=218 texture_loads=2 combine=0 sync=11 fill_rect=2 othermode=20 packets=4
 host_renderer_texture_classification raw_candidates=2 real_dl=0 malformed_dl=2 false_payload=0 backed=0 real_unbacked=0
-host_renderer_backend packets=273 geometry=7 state=30 texture=220 target=5 sync=11 address_refs=10 valid_refs=10 invalid_refs=0
+host_renderer_backend packets=273 geometry=7 state=30 texture=220 target=5 sync=11 address_refs=10 valid_refs=10 invalid_refs=0 backed_refs=6 unbacked_refs=4
 host_renderer_opcode_histogram op00=154 opF5=114 op6C=112 opF2=112 op93=78 op20=40 op03=34 op01=29 op02=28 opBC=22 op40=20 opBA=20
-host_renderer_backend_packet[0]=pipe_sync op=0xE7 w0=0xE7000000 w1=0x00000000 resolved=0x00000000 valid=0
-host_renderer_backend_packet[1]=set_depth_image op=0xFE w0=0xFE000000 w1=0x80142440 resolved=0x80142440 valid=1
-host_renderer_backend_packet[2]=pipe_sync op=0xE7 w0=0xE7000000 w1=0x00000000 resolved=0x00000000 valid=0
-host_renderer_backend_packet[3]=set_othermode_l op=0xB9 w0=0xB900031D w1=0x00000000 resolved=0x00000000 valid=0
-host_renderer_backend_packet[4]=set_color_image op=0xFF w0=0xFF10013F w1=0x00142440 resolved=0x80142440 valid=1
-host_renderer_backend_packet[5]=set_othermode_h op=0xBA w0=0xBA001402 w1=0x00300000 resolved=0x00000000 valid=0
-host_renderer_backend_packet[6]=fill_rect op=0xF6 w0=0xF60003BC w1=0x00000000 resolved=0x00000000 valid=0
-host_renderer_backend_packet[7]=pipe_sync op=0xE7 w0=0xE7000000 w1=0x00000000 resolved=0x00000000 valid=0
+host_renderer_backend_packet[0]=pipe_sync op=0xE7 w0=0xE7000000 w1=0x00000000 resolved=0x00000000 valid=0 backed=0 kind=none bank=255 resource_size=0x0
+host_renderer_backend_packet[1]=set_depth_image op=0xFE w0=0xFE000000 w1=0x80142440 resolved=0x80142440 valid=1 backed=1 kind=memp_alloc bank=4 resource_size=0x25840
+host_renderer_backend_packet[2]=pipe_sync op=0xE7 w0=0xE7000000 w1=0x00000000 resolved=0x00000000 valid=0 backed=0 kind=none bank=255 resource_size=0x0
+host_renderer_backend_packet[3]=set_othermode_l op=0xB9 w0=0xB900031D w1=0x00000000 resolved=0x00000000 valid=0 backed=0 kind=none bank=255 resource_size=0x0
+host_renderer_backend_packet[4]=set_color_image op=0xFF w0=0xFF10013F w1=0x00142440 resolved=0x80142440 valid=1 backed=1 kind=memp_alloc bank=4 resource_size=0x25840
+host_renderer_backend_packet[5]=set_othermode_h op=0xBA w0=0xBA001402 w1=0x00300000 resolved=0x00000000 valid=0 backed=0 kind=none bank=255 resource_size=0x0
+host_renderer_backend_packet[6]=fill_rect op=0xF6 w0=0xF60003BC w1=0x00000000 resolved=0x00000000 valid=0 backed=0 kind=none bank=255 resource_size=0x0
+host_renderer_backend_packet[7]=pipe_sync op=0xE7 w0=0xE7000000 w1=0x00000000 resolved=0x00000000 valid=0 backed=0 kind=none bank=255 resource_size=0x0
+host_renderer_backend_packet[8]=matrix op=0x01 w0=0x01030040 w1=0x0011B520 resolved=0x8011B520 valid=1 backed=1 kind=memp_alloc bank=4 resource_size=0x200
+host_renderer_backend_packet[9]=set_color_image op=0xFF w0=0xFF100000 w1=0x003DA800 resolved=0x803DA800 valid=1 backed=1 kind=rom_dma bank=255 resource_size=0x70010
 host_renderer_dlist[0]=0xBC000006_00000000
 host_renderer_dlist[1]=0xBC000406_00100000
 host_renderer_dlist[2]=0x06000000_01000040
@@ -321,12 +324,7 @@ host_renderer_branch_dlist[6]=0xE7000000_00000000
 host_renderer_branch_dlist[7]=0xB900031D_00000000
 host_renderer_texture_image[0]=cmd=0x8011B488 w0=0xFDD00000 w1=0x58080000 resolved=0x58080000 valid=0 segmented=0 segment=0 segment_base=0x00000000
 host_renderer_texture_image[1]=cmd=0x8011B880 w0=0xFDD00000 w1=0x8E020000 resolved=0x8E020000 valid=0 segmented=0 segment=0 segment_base=0x00000000
-host_renderer_texture_image[2]=cmd=0x801001A0 w0=0xFD5FE0FF w1=0xFFC0EF07 resolved=0xFFC0EF07 valid=0 segmented=0 segment=0 segment_base=0x00000000
-host_renderer_texture_image[3]=cmd=0x801001F0 w0=0xFDB83CCB w1=0x03822FC7 resolved=0x03822FC7 valid=0 segmented=1 segment=3 segment_base=0x00000000
-host_renderer_texture_image[4]=cmd=0x80100260 w0=0xFD203D21 w1=0xBD08FD10 resolved=0xBD08FD10 valid=0 segmented=0 segment=0 segment_base=0x00000000
-host_renderer_texture_image[5]=cmd=0x801002C8 w0=0xFD15FC15 w1=0x83E67DF6 resolved=0x83E67DF6 valid=0 segmented=0 segment=0 segment_base=0x00000000
-host_renderer_texture_image[6]=cmd=0x80100350 w0=0xFDE1F913 w1=0x06283040 resolved=0x06283040 valid=0 segmented=1 segment=6 segment_base=0x00000000
-host_renderer_texture_image[7]=cmd=0x80101050 w0=0xFD34BE74 w1=0x06CE2EDD resolved=0x06CE2EDD valid=0 segmented=1 segment=6 segment_base=0x00000000
+resource_summary total=90 bytes=7489792 rom_dma=23 cdata=1 csegment=1 memp_alloc=65 memp_resize=0 decompress_stub=0
 host_rsp_task_done_queued count=1 queue=0x8005D9A0 msg=0x803B38EC type=2 queued=1 limit=1
 host_rsp_task_done_delivered queue=0x8005D9A0 msg=0x803B38EC type=2 limit=1
 host_rsp_task_consume_limit reached delivered=1; set GOLDENEYE_CONTINUE_AFTER_RSP_TASK=1 or GOLDENEYE_RSP_TASK_LIMIT=N to continue
@@ -348,5 +346,5 @@ This now proves:
 4. first-pass ROM DMA, message queue, cooperative thread, VI framebuffer, and timing primitives execute in the host runtime;
 5. guarded `recomp_entrypoint` dispatch is isolated in a child process and progresses through `recomp_entrypoint -> boot bridge -> generated init -> generated mainproc`, dispatching recorded thread id `3` past the debug registry and early audio/asset placeholders, through `guPerspectiveF`, through host frame ticks, and into a host renderer shim that recursively walks the first bounded display-list task, classifies presentation commands, prints a top-opcode histogram, validates backend resource addresses, emits named backend packet previews, previews texture image candidates with command addresses/raw words/segment state, and then delivers scheduler done messages back to `gfxFrameMsgQ`. Probe contexts initialize N64Recomp's odd-FPR pointer (`f_odd`) for MIPS3 float mode; without that, generated `guPerspectiveF` faulted while writing odd float registers.
 
-It does **not** boot the game yet. The next blocker is real memp/resource provenance before RT64/custom command execution: the first bounded generated task now scans the top-level `303` commands, resolves all three segmented branch-display-list addresses, probes all three branch targets as `payload_or_unknown`, skips them by default, validates `10` of `10` backend address-bearing refs, classifies `2` malformed display-list image commands and `0` payload false positives in the guarded default path, and delivers the scheduler done message; a two-task guarded probe (`GOLDENEYE_RSP_TASK_LIMIT=2`) advances through two scheduler-done cycles with the same branch-guard/texture-classification shape. `GOLDENEYE_RENDERER_SCAN_PAYLOAD_BRANCHES=1` preserves the old forensic over-walk path and reproduces `raw_candidates=16 real_dl=2 malformed_dl=2 false_payload=12`. The runtime still needs real memp/resource provenance before F3DEX/RDP command mapping into RT64 or a custom renderer can produce meaningful output, plus stricter replacement of scheduler/video/audio/input placeholders.
+It does **not** boot the game yet. The next blocker is real memp pool initialization/decompression provenance before RT64/custom command execution: the first bounded generated task now scans the top-level `303` commands, resolves all three segmented branch-display-list addresses, probes all three branch targets as `payload_or_unknown`, skips them by default, validates `10` of `10` backend address-bearing refs, proves `6` are resource-backed (`memp_alloc`/`rom_dma`) and `4` are translated-but-unbacked, classifies `2` malformed display-list image commands and `0` payload false positives in the guarded default path, records `resource_summary total=90 bytes=7489792 rom_dma=23 cdata=1 csegment=1 memp_alloc=65 memp_resize=0 decompress_stub=0`, and delivers the scheduler done message; a two-task guarded probe (`GOLDENEYE_RSP_TASK_LIMIT=2`) advances through two scheduler-done cycles with the same branch/resource-classification shape. `GOLDENEYE_RENDERER_SCAN_PAYLOAD_BRANCHES=1` preserves the old forensic over-walk path. The runtime still needs proper memp bank initialization and real decompression/resource sizing before F3DEX/RDP command mapping into RT64 or a custom renderer can produce meaningful output, plus stricter replacement of scheduler/video/audio/input placeholders.
 

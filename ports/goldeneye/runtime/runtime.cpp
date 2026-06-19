@@ -40,7 +40,11 @@ constexpr std::size_t kNumSections = 29;
 
 std::vector<int32_t> g_section_address_storage;
 std::vector<uint8_t> g_rom_bytes;
+std::vector<GoldenEyeResourceProvenance> g_resources;
 GoldenEyeRuntimeDiagnostics g_diag{};
+
+constexpr uint32_t kMempPoolsAddress = 0x80063BB0u;
+constexpr uint32_t kMempPoolStride = 0x10u;
 
 bool entrypoint_dispatch_enabled() {
     const char* value = std::getenv("GOLDENEYE_TRY_ENTRYPOINT");
@@ -197,6 +201,7 @@ bool goldeneye_runtime_copy_rom_to_vaddr(uint8_t* rdram, uint32_t rom_addr, uint
     }
     g_diag.dma_copies++;
     g_diag.dma_bytes += size;
+    goldeneye_runtime_record_resource(GoldenEyeResourceKind::RomDma, vaddr, static_cast<uint32_t>(size), rom_addr);
     return true;
 }
 
@@ -205,7 +210,11 @@ std::size_t goldeneye_runtime_rom_size() {
 }
 
 bool goldeneye_runtime_preload_csegment_from_elf(uint8_t* rdram) {
-    return copy_file_range_to_vaddr(rdram, default_elf_path(), kCsegmentElfFileOffset, kCsegmentRamStart, kCsegmentElfFileSize);
+    const bool ok = copy_file_range_to_vaddr(rdram, default_elf_path(), kCsegmentElfFileOffset, kCsegmentRamStart, kCsegmentElfFileSize);
+    if (ok) {
+        goldeneye_runtime_record_resource(GoldenEyeResourceKind::CSegmentElfRestore, kCsegmentRamStart, kCsegmentElfFileSize, kCsegmentElfFileOffset);
+    }
+    return ok;
 }
 
 GoldenEyeRuntimeDiagnostics goldeneye_runtime_get_diagnostics() {
@@ -226,6 +235,135 @@ void goldeneye_runtime_print_diagnostics() {
         diag.threads_dispatched,
         diag.rsp_tasks_started,
         diag.rsp_done_messages_delivered);
+}
+
+const char* goldeneye_runtime_resource_kind_name(GoldenEyeResourceKind kind) {
+    switch (kind) {
+    case GoldenEyeResourceKind::RomDma: return "rom_dma";
+    case GoldenEyeResourceKind::CDataPreload: return "cdata_preload";
+    case GoldenEyeResourceKind::CSegmentElfRestore: return "csegment_elf_restore";
+    case GoldenEyeResourceKind::MempAlloc: return "memp_alloc";
+    case GoldenEyeResourceKind::MempResize: return "memp_resize";
+    case GoldenEyeResourceKind::DecompressStub: return "decompress_stub";
+    case GoldenEyeResourceKind::Unknown: return "unknown";
+    default: return "unknown";
+    }
+}
+
+void goldeneye_runtime_record_resource(GoldenEyeResourceKind kind, uint32_t vaddr, uint32_t size, uint32_t source_rom, uint8_t bank) {
+    if (vaddr == 0 || size == 0) {
+        return;
+    }
+
+    GoldenEyeResourceProvenance resource{};
+    resource.vaddr = vaddr;
+    resource.size = size;
+    resource.source_rom = source_rom;
+    resource.bank = bank;
+    resource.kind = kind;
+    g_resources.push_back(resource);
+}
+
+bool goldeneye_runtime_find_resource(uint32_t vaddr, std::size_t size, GoldenEyeResourceProvenance* out_resource) {
+    const uint64_t query_start = vaddr;
+    const uint64_t query_size = std::max<std::size_t>(size, 1);
+    const uint64_t query_end = query_start + query_size;
+    if (query_end < query_start) {
+        return false;
+    }
+
+    for (auto it = g_resources.rbegin(); it != g_resources.rend(); ++it) {
+        const uint64_t start = it->vaddr;
+        const uint64_t end = start + it->size;
+        if (end < start) {
+            continue;
+        }
+        if (query_start >= start && query_end <= end) {
+            if (out_resource != nullptr) {
+                *out_resource = *it;
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+void goldeneye_runtime_print_resource_summary() {
+    std::size_t rom_dma = 0;
+    std::size_t cdata = 0;
+    std::size_t csegment = 0;
+    std::size_t memp_alloc = 0;
+    std::size_t memp_resize = 0;
+    std::size_t decompress = 0;
+    std::size_t total_bytes = 0;
+
+    for (const GoldenEyeResourceProvenance& resource : g_resources) {
+        total_bytes += resource.size;
+        switch (resource.kind) {
+        case GoldenEyeResourceKind::RomDma: rom_dma++; break;
+        case GoldenEyeResourceKind::CDataPreload: cdata++; break;
+        case GoldenEyeResourceKind::CSegmentElfRestore: csegment++; break;
+        case GoldenEyeResourceKind::MempAlloc: memp_alloc++; break;
+        case GoldenEyeResourceKind::MempResize: memp_resize++; break;
+        case GoldenEyeResourceKind::DecompressStub: decompress++; break;
+        case GoldenEyeResourceKind::Unknown: break;
+        }
+    }
+
+    std::printf("resource_summary total=%zu bytes=%zu rom_dma=%zu cdata=%zu csegment=%zu memp_alloc=%zu memp_resize=%zu decompress_stub=%zu\n",
+        g_resources.size(),
+        total_bytes,
+        rom_dma,
+        cdata,
+        csegment,
+        memp_alloc,
+        memp_resize,
+        decompress);
+
+    const std::size_t preview_count = std::min<std::size_t>(g_resources.size(), 10);
+    const std::size_t first = g_resources.size() - preview_count;
+    for (std::size_t i = first; i < g_resources.size(); ++i) {
+        const GoldenEyeResourceProvenance& resource = g_resources[i];
+        std::printf("  resource[%zu]=kind=%s vaddr=0x%08X size=0x%X source_rom=0x%08X bank=%u\n",
+            i,
+            goldeneye_runtime_resource_kind_name(resource.kind),
+            resource.vaddr,
+            resource.size,
+            resource.source_rom,
+            resource.bank);
+    }
+}
+
+bool goldeneye_runtime_read_memp_pool(uint8_t* rdram, uint8_t bank, GoldenEyeMempPool* out_pool) {
+    if (out_pool == nullptr || bank >= 16) {
+        return false;
+    }
+    const uint32_t base = kMempPoolsAddress + static_cast<uint32_t>(bank) * kMempPoolStride;
+    uint8_t* ptr = nullptr;
+    if (!goldeneye_runtime_translate(rdram, base, kMempPoolStride, &ptr)) {
+        return false;
+    }
+    out_pool->start = static_cast<uint32_t>(MEM_W(0, S32(base + 0x00u)));
+    out_pool->pos = static_cast<uint32_t>(MEM_W(0, S32(base + 0x04u)));
+    out_pool->end = static_cast<uint32_t>(MEM_W(0, S32(base + 0x08u)));
+    out_pool->prevpos = static_cast<uint32_t>(MEM_W(0, S32(base + 0x0Cu)));
+    return true;
+}
+
+bool goldeneye_runtime_write_memp_pool(uint8_t* rdram, uint8_t bank, const GoldenEyeMempPool& pool) {
+    if (bank >= 16) {
+        return false;
+    }
+    const uint32_t base = kMempPoolsAddress + static_cast<uint32_t>(bank) * kMempPoolStride;
+    uint8_t* ptr = nullptr;
+    if (!goldeneye_runtime_translate(rdram, base, kMempPoolStride, &ptr)) {
+        return false;
+    }
+    MEM_W(0, S32(base + 0x00u)) = static_cast<int32_t>(pool.start);
+    MEM_W(0, S32(base + 0x04u)) = static_cast<int32_t>(pool.pos);
+    MEM_W(0, S32(base + 0x08u)) = static_cast<int32_t>(pool.end);
+    MEM_W(0, S32(base + 0x0Cu)) = static_cast<int32_t>(pool.prevpos);
+    return true;
 }
 
 void goldeneye_runtime_record_queue_created() { g_diag.queues_created++; }
@@ -312,6 +450,7 @@ bool goldeneye_runtime_init(uint8_t* rdram, std::size_t rdram_size, const char* 
 
     *out_state = GoldenEyeRuntimeState{};
     g_diag = GoldenEyeRuntimeDiagnostics{};
+    g_resources.clear();
 
     g_section_address_storage.assign(kNumSections, 0);
     for (const LocalSectionInfo& section : kSections) {
@@ -360,6 +499,7 @@ bool goldeneye_runtime_init(uint8_t* rdram, std::size_t rdram_size, const char* 
     const std::size_t cdata_size = static_cast<std::size_t>(kInflateRomEnd - kCdataRomStart);
     if (goldeneye_runtime_copy_rom_to_vaddr(rdram, kCdataRomStart, kCsegmentRamStart, cdata_size)) {
         out_state->preloaded_cdata_bytes = cdata_size;
+        goldeneye_runtime_record_resource(GoldenEyeResourceKind::CDataPreload, kCsegmentRamStart, static_cast<uint32_t>(cdata_size), kCdataRomStart);
     } else {
         std::fprintf(stderr, "warning: failed to preload compressed cdata block rom=0x%08X ram=0x%08X size=0x%zX\n",
             kCdataRomStart,

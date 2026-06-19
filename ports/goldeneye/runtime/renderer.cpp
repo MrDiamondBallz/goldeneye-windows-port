@@ -452,6 +452,14 @@ void record_texture_image_preview(
         preview.segment = static_cast<uint8_t>(w1 >> 24);
         preview.segment_base = segments[preview.segment];
     }
+    if (valid) {
+        GoldenEyeResourceProvenance resource{};
+        preview.resource_backed = goldeneye_runtime_find_resource(resolved_address, 1, &resource);
+        if (preview.resource_backed) {
+            preview.resource_kind = goldeneye_runtime_resource_kind_name(resource.kind);
+            preview.resource_bank = resource.bank;
+        }
+    }
 }
 
 void record_backend_packet_preview(
@@ -470,6 +478,15 @@ void record_backend_packet_preview(
     packet.w1 = w1;
     packet.resolved_address = resolved_address;
     packet.has_resolved_address = has_resolved_address;
+    if (has_resolved_address) {
+        GoldenEyeResourceProvenance resource{};
+        packet.resource_backed = goldeneye_runtime_find_resource(resolved_address, 1, &resource);
+        if (packet.resource_backed) {
+            packet.resource_kind = goldeneye_runtime_resource_kind_name(resource.kind);
+            packet.resource_bank = resource.bank;
+            packet.resource_size = resource.size;
+        }
+    }
 }
 
 const char* backend_packet_name(uint8_t opcode) {
@@ -533,6 +550,12 @@ void classify_command(
         if (resolve_runtime_resource_address(rdram, raw_address, segments, &resolved_address, &has_resolved_address)
             && has_resolved_address) {
             result.backend_valid_refs++;
+            GoldenEyeResourceProvenance resource{};
+            if (goldeneye_runtime_find_resource(resolved_address, 1, &resource)) {
+                result.backend_backed_refs++;
+            } else {
+                result.backend_unbacked_refs++;
+            }
         } else {
             result.backend_invalid_refs++;
         }
@@ -703,40 +726,41 @@ void classify_command(
             has_resolved_address,
             plausible_neighborhood,
             likely_payload_false_positive);
+        GoldenEyeResourceProvenance texture_resource{};
+        const bool resource_backed = has_resolved_address && goldeneye_runtime_find_resource(resolved_address, 1, &texture_resource);
         if (has_resolved_address) {
             result.resolved_texture_image_refs++;
-            result.texture_image_real_backed++;
-            record_texture_image_preview(
-                result,
-                command_addr,
-                list_start,
-                branch_source_addr,
-                depth,
-                local_command_index,
-                w0,
-                w1,
-                resolved_address,
-                true,
-                plausible_neighborhood,
-                likely_payload_false_positive,
-                segments);
         } else {
             result.unresolved_texture_image_refs++;
+        }
+        if (resource_backed) {
+            result.texture_image_real_backed++;
+        } else {
             result.texture_image_real_unbacked++;
-            record_texture_image_preview(
-                result,
+        }
+        record_texture_image_preview(
+            result,
+            command_addr,
+            list_start,
+            branch_source_addr,
+            depth,
+            local_command_index,
+            w0,
+            w1,
+            has_resolved_address ? resolved_address : (resolved_address != 0 ? resolved_address : w1),
+            has_resolved_address,
+            plausible_neighborhood,
+            likely_payload_false_positive,
+            segments);
+        if (texture_trace_enabled()) {
+            std::printf("host_renderer_texture_resource cmd=0x%08X addr=0x%08X translated=%d backed=%d kind=%s bank=%u size=0x%X\n",
                 command_addr,
-                list_start,
-                branch_source_addr,
-                depth,
-                local_command_index,
-                w0,
-                w1,
-                resolved_address != 0 ? resolved_address : w1,
-                false,
-                plausible_neighborhood,
-                likely_payload_false_positive,
-                segments);
+                has_resolved_address ? resolved_address : w1,
+                has_resolved_address ? 1 : 0,
+                resource_backed ? 1 : 0,
+                resource_backed ? goldeneye_runtime_resource_kind_name(texture_resource.kind) : "none",
+                resource_backed ? texture_resource.bank : 0xFFu,
+                resource_backed ? texture_resource.size : 0u);
         }
         break;
     }
@@ -1058,7 +1082,7 @@ void goldeneye_renderer_print_task_result(const GoldenEyeRendererTaskResult& res
         result.texture_image_real_unbacked);
 
     std::printf(
-        "host_renderer_backend packets=%u geometry=%u state=%u texture=%u target=%u sync=%u address_refs=%u valid_refs=%u invalid_refs=%u\n",
+        "host_renderer_backend packets=%u geometry=%u state=%u texture=%u target=%u sync=%u address_refs=%u valid_refs=%u invalid_refs=%u backed_refs=%u unbacked_refs=%u\n",
         result.backend_packets,
         result.backend_geometry_packets,
         result.backend_state_packets,
@@ -1067,21 +1091,27 @@ void goldeneye_renderer_print_task_result(const GoldenEyeRendererTaskResult& res
         result.backend_sync_packets,
         result.backend_address_refs,
         result.backend_valid_refs,
-        result.backend_invalid_refs);
+        result.backend_invalid_refs,
+        result.backend_backed_refs,
+        result.backend_unbacked_refs);
 
     print_top_opcodes(result);
 
     for (std::size_t i = 0; i < result.backend_packet_preview_count; ++i) {
         const GoldenEyeRendererPacketPreview& packet = result.backend_packet_previews[i];
         std::printf(
-            "  host_renderer_backend_packet[%zu]=%s op=0x%02X w0=0x%08X w1=0x%08X resolved=0x%08X valid=%d\n",
+            "  host_renderer_backend_packet[%zu]=%s op=0x%02X w0=0x%08X w1=0x%08X resolved=0x%08X valid=%d backed=%d kind=%s bank=%u resource_size=0x%X\n",
             i,
             backend_packet_name(packet.opcode),
             packet.opcode,
             packet.w0,
             packet.w1,
             packet.resolved_address,
-            packet.has_resolved_address ? 1 : 0);
+            packet.has_resolved_address ? 1 : 0,
+            packet.resource_backed ? 1 : 0,
+            packet.resource_kind,
+            packet.resource_bank,
+            packet.resource_size);
     }
 
     for (std::size_t i = 0; i < result.first_command_count; ++i) {
@@ -1099,7 +1129,7 @@ void goldeneye_renderer_print_task_result(const GoldenEyeRendererTaskResult& res
     for (std::size_t i = 0; i < result.first_texture_image_count; ++i) {
         const GoldenEyeRendererTextureImagePreview& preview = result.first_texture_images[i];
         std::printf(
-            "  host_renderer_texture_image[%zu]=cmd=0x%08X list=0x%08X branch_src=0x%08X depth=%u local_index=%u w0=0x%08X w1=0x%08X resolved=0x%08X valid=%d plausible=%d payload_false_positive=%d segmented=%d segment=%u segment_base=0x%08X\n",
+            "  host_renderer_texture_image[%zu]=cmd=0x%08X list=0x%08X branch_src=0x%08X depth=%u local_index=%u w0=0x%08X w1=0x%08X resolved=0x%08X valid=%d backed=%d kind=%s bank=%u plausible=%d payload_false_positive=%d segmented=%d segment=%u segment_base=0x%08X\n",
             i,
             preview.command_addr,
             preview.list_start,
@@ -1110,6 +1140,9 @@ void goldeneye_renderer_print_task_result(const GoldenEyeRendererTaskResult& res
             preview.w1,
             preview.resolved_address,
             preview.valid ? 1 : 0,
+            preview.resource_backed ? 1 : 0,
+            preview.resource_kind,
+            preview.resource_bank,
             preview.plausible_command_neighborhood ? 1 : 0,
             preview.likely_payload_false_positive ? 1 : 0,
             preview.segmented ? 1 : 0,

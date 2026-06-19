@@ -349,6 +349,7 @@ void osRecvMesg_recomp(uint8_t* rdram, recomp_context* ctx) {
             goldeneye_runtime_rsp_task_limit());
         std::fflush(stdout);
         if (goldeneye_runtime_should_stop_after_rsp_done()) {
+            goldeneye_runtime_print_resource_summary();
             std::fprintf(stderr,
                 "host_rsp_task_consume_limit reached delivered=%zu; set GOLDENEYE_CONTINUE_AFTER_RSP_TASK=1 or GOLDENEYE_RSP_TASK_LIMIT=N to continue\n",
                 goldeneye_runtime_get_diagnostics().rsp_done_messages_delivered);

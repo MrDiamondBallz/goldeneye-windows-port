@@ -6,10 +6,14 @@
 
 struct GoldenEyeRendererPacketPreview {
     uint8_t opcode{};
+    uint8_t resource_bank{0xFFu};
     uint32_t w0{};
     uint32_t w1{};
     uint32_t resolved_address{};
+    uint32_t resource_size{};
+    const char* resource_kind{"none"};
     bool has_resolved_address{};
+    bool resource_backed{};
 };
 
 struct GoldenEyeRendererTextureImagePreview {
@@ -23,8 +27,11 @@ struct GoldenEyeRendererTextureImagePreview {
     uint32_t depth{};
     uint32_t local_command_index{};
     uint8_t segment{};
+    uint8_t resource_bank{0xFFu};
+    const char* resource_kind{"none"};
     bool segmented{};
     bool valid{};
+    bool resource_backed{};
     bool plausible_command_neighborhood{};
     bool likely_payload_false_positive{};
 };
@@ -86,6 +93,8 @@ struct GoldenEyeRendererTaskResult {
     uint32_t backend_address_refs{};
     uint32_t backend_valid_refs{};
     uint32_t backend_invalid_refs{};
+    uint32_t backend_backed_refs{};
+    uint32_t backend_unbacked_refs{};
     std::array<uint32_t, 256> opcode_histogram{};
     bool command_limit_hit{};
     bool list_limit_hit{};
