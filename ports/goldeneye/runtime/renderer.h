@@ -38,6 +38,12 @@ struct GoldenEyeRendererTaskResult {
     uint32_t display_lists_scanned{};
     uint32_t max_depth_reached{};
     uint32_t branch_display_lists{};
+    uint32_t branch_targets_considered{};
+    uint32_t branch_targets_plausible{};
+    uint32_t branch_targets_payload_or_unknown{};
+    uint32_t branch_targets_untranslated{};
+    uint32_t branch_targets_skipped{};
+    uint32_t branch_targets_scanned{};
     uint32_t segmented_references{};
     uint32_t resolved_segmented_references{};
     uint32_t unresolved_references{};

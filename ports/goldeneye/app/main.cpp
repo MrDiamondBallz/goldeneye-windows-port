@@ -279,6 +279,6 @@ int main() {
     maybe_run_guarded_entrypoint(rdram);
 
     std::printf("controlled_probe_result=OK boot_primitives_enabled safe_generated_dispatch_enabled\n");
-    std::printf("next_runtime_blocker=renderer scanner now separates real/malformed/payload texture candidates; next layers are branch-target guarding plus real memp/resource provenance before RT64/custom rendering\n");
+    std::printf("next_runtime_blocker=renderer branch guard now skips payload/data branch targets by default; next layer is real memp/resource provenance before RT64/custom rendering\n");
     return 0;
 }

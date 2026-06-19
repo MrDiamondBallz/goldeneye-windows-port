@@ -276,6 +276,20 @@ grep -E 'branch_target|texture_classification|host_renderer_execute|host_rendere
 
 **Expected:** command count/noise drops if false branches were being followed; safe exit remains `child_exit=152`.
 
+**Implemented checkpoint:** branch targets are now probed before recursion. The default guarded path reports:
+
+```text
+host_renderer_branch_summary targets=3 plausible=0 payload_or_unknown=3 untranslated=0 skipped=3 scheduled=0 payload_scan_enabled=0
+host_renderer_texture_classification raw_candidates=2 real_dl=0 malformed_dl=2 false_payload=0 backed=0 real_unbacked=0
+```
+
+Opt-in forensic mode keeps the old over-walk available:
+
+```text
+GOLDENEYE_RENDERER_SCAN_PAYLOAD_BRANCHES=1 ...
+host_renderer_texture_classification raw_candidates=16 real_dl=2 malformed_dl=2 false_payload=12 backed=0 real_unbacked=2
+```
+
 ---
 
 ### Task 4: Replace fake global memp cursor with real memp pool mirror

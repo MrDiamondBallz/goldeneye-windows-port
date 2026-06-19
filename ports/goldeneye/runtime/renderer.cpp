@@ -23,7 +23,26 @@ constexpr uint32_t kGbiClearGeometryMode = 0xB6u;
 constexpr uint32_t kGbiEndDisplayList = 0xB8u;
 constexpr uint32_t kGbiMoveWordSegment = 0x06u;
 constexpr uint32_t kMinimumCommandBytes = 8u;
+constexpr std::size_t kBranchProbeCommandLimit = 32;
+constexpr std::size_t kBranchProbePreviewCount = 8;
 constexpr std::size_t kSegmentCount = 16;
+
+enum class BranchTargetClassification {
+    PlausibleDisplayList,
+    PayloadOrUnknown,
+    Untranslated,
+};
+
+struct BranchTargetProbe {
+    BranchTargetClassification classification{BranchTargetClassification::Untranslated};
+    uint32_t readable{};
+    uint32_t known{};
+    uint32_t unknown{};
+    bool enddl_seen{};
+    bool stopped_on_unreadable{};
+    std::array<uint8_t, kBranchProbePreviewCount> first_opcodes{};
+    std::size_t first_opcode_count{};
+};
 
 struct BranchTarget {
     uint32_t vaddr{};
@@ -54,6 +73,11 @@ uint32_t renderer_list_command_limit() {
 
 uint32_t renderer_depth_limit() {
     return parse_env_u32("GOLDENEYE_RENDERER_DEPTH_LIMIT", 8, 1, 64);
+}
+
+bool renderer_scan_payload_branches_enabled() {
+    const char* value = std::getenv("GOLDENEYE_RENDERER_SCAN_PAYLOAD_BRANCHES");
+    return value != nullptr && value[0] != '\0' && value[0] != '0';
 }
 
 bool read_u32(uint8_t* rdram, uint32_t vaddr, uint32_t* out) {
@@ -223,6 +247,98 @@ bool looks_like_display_list_neighborhood(uint8_t* rdram, uint32_t command_addr)
     // by accident, with random-looking neighbors. Keep this heuristic simple so
     // trace output exposes uncertainty instead of hiding it.
     return readable >= 3 && (known >= 3 || (known >= 2 && has_texture_sequence_neighbor));
+}
+
+const char* branch_target_classification_name(BranchTargetClassification classification) {
+    switch (classification) {
+    case BranchTargetClassification::PlausibleDisplayList:
+        return "plausible_display_list";
+    case BranchTargetClassification::PayloadOrUnknown:
+        return "payload_or_unknown";
+    case BranchTargetClassification::Untranslated:
+        return "untranslated";
+    default:
+        return "unknown";
+    }
+}
+
+BranchTargetProbe probe_branch_target(uint8_t* rdram, uint32_t target) {
+    BranchTargetProbe probe{};
+    if (!can_translate_u64_command(rdram, target)) {
+        probe.classification = BranchTargetClassification::Untranslated;
+        return probe;
+    }
+
+    for (std::size_t i = 0; i < kBranchProbeCommandLimit; ++i) {
+        uint32_t w0 = 0;
+        uint32_t w1 = 0;
+        if (!read_command(rdram, target + static_cast<uint32_t>(i * kMinimumCommandBytes), &w0, &w1)) {
+            probe.stopped_on_unreadable = true;
+            break;
+        }
+
+        const uint8_t opcode = static_cast<uint8_t>(w0 >> 24);
+        if (probe.first_opcode_count < probe.first_opcodes.size()) {
+            probe.first_opcodes[probe.first_opcode_count++] = opcode;
+        }
+        probe.readable++;
+        if (is_known_gbi_or_rdp_opcode(opcode)) {
+            probe.known++;
+        } else {
+            probe.unknown++;
+        }
+        if (opcode == kGbiEndDisplayList) {
+            probe.enddl_seen = true;
+            break;
+        }
+    }
+
+    if (probe.readable == 0) {
+        probe.classification = BranchTargetClassification::Untranslated;
+        return probe;
+    }
+
+    // True branch display lists should quickly look like dense GBI/RDP command
+    // streams. The false GoldenEye targets observed here start with a few
+    // plausible-looking segment words, then dissolve into payload bytes and have
+    // no nearby EndDL. Treat that as data by default; an env flag can still scan
+    // it for forensics.
+    const bool dense_known_stream = probe.known >= 6 && probe.unknown <= 2;
+    const bool has_terminator_with_known_stream = probe.enddl_seen && probe.known >= 2 && probe.known >= probe.unknown;
+    if (dense_known_stream || has_terminator_with_known_stream) {
+        probe.classification = BranchTargetClassification::PlausibleDisplayList;
+    } else {
+        probe.classification = BranchTargetClassification::PayloadOrUnknown;
+    }
+    return probe;
+}
+
+void print_branch_target_probe(
+    uint32_t source_addr,
+    uint32_t target,
+    uint32_t depth,
+    const BranchTargetProbe& probe,
+    bool scheduled) {
+
+    std::printf(
+        "host_renderer_branch_target source=0x%08X target=0x%08X depth=%u classification=%s readable=%u known=%u unknown=%u enddl=%d unreadable=%d scheduled=%d first_ops=",
+        source_addr,
+        target,
+        depth,
+        branch_target_classification_name(probe.classification),
+        probe.readable,
+        probe.known,
+        probe.unknown,
+        probe.enddl_seen ? 1 : 0,
+        probe.stopped_on_unreadable ? 1 : 0,
+        scheduled ? 1 : 0);
+    for (std::size_t i = 0; i < probe.first_opcode_count; ++i) {
+        std::printf("%s%02X", i == 0 ? "" : ",", probe.first_opcodes[i]);
+    }
+    if (probe.first_opcode_count == 0) {
+        std::printf("none");
+    }
+    std::printf("\n");
 }
 
 bool texture_trace_enabled() {
@@ -780,12 +896,43 @@ void scan_display_list(
 
             if (!resolved || !can_translate_u64_command(rdram, branch_vaddr)) {
                 result.unresolved_references++;
+                result.branch_targets_considered++;
+                result.branch_targets_untranslated++;
+                BranchTargetProbe probe{};
+                probe.classification = BranchTargetClassification::Untranslated;
+                print_branch_target_probe(command_addr, branch_vaddr, depth + 1, probe, false);
             } else if (stack_contains(recursion_stack, branch_vaddr)) {
                 result.cycle_references++;
             } else if (depth + 1 > depth_limit) {
                 result.depth_limit_hit = true;
             } else {
-                branch_targets.push_back(BranchTarget{branch_vaddr, command_addr, segments});
+                result.branch_targets_considered++;
+                const BranchTargetProbe probe = probe_branch_target(rdram, branch_vaddr);
+                const bool payload_scan_enabled = renderer_scan_payload_branches_enabled();
+                bool scheduled = false;
+                switch (probe.classification) {
+                case BranchTargetClassification::PlausibleDisplayList:
+                    result.branch_targets_plausible++;
+                    scheduled = true;
+                    break;
+                case BranchTargetClassification::PayloadOrUnknown:
+                    result.branch_targets_payload_or_unknown++;
+                    scheduled = payload_scan_enabled;
+                    if (!scheduled) {
+                        result.branch_targets_skipped++;
+                    }
+                    break;
+                case BranchTargetClassification::Untranslated:
+                    result.branch_targets_untranslated++;
+                    result.unresolved_references++;
+                    scheduled = false;
+                    break;
+                }
+                print_branch_target_probe(command_addr, branch_vaddr, depth + 1, probe, scheduled);
+                if (scheduled) {
+                    result.branch_targets_scanned++;
+                    branch_targets.push_back(BranchTarget{branch_vaddr, command_addr, segments});
+                }
             }
         }
 
@@ -868,6 +1015,16 @@ void goldeneye_renderer_print_task_result(const GoldenEyeRendererTaskResult& res
         result.command_limit_hit ? 1 : 0,
         result.list_limit_hit ? 1 : 0,
         result.depth_limit_hit ? 1 : 0);
+
+    std::printf(
+        "host_renderer_branch_summary targets=%u plausible=%u payload_or_unknown=%u untranslated=%u skipped=%u scheduled=%u payload_scan_enabled=%d\n",
+        result.branch_targets_considered,
+        result.branch_targets_plausible,
+        result.branch_targets_payload_or_unknown,
+        result.branch_targets_untranslated,
+        result.branch_targets_skipped,
+        result.branch_targets_scanned,
+        renderer_scan_payload_branches_enabled() ? 1 : 0);
 
     std::printf(
         "host_renderer_presentation matrix=%u vertex=%u texture=%u triangles=%u geom_mode=%u tex_images=%u tex_malformed=%u tex_segmented=%u tex_resolved=%u tex_unresolved=%u color_images=%u depth_images=%u tile_setup=%u texture_loads=%u combine=%u sync=%u fill_rect=%u othermode=%u packets=%u\n",
